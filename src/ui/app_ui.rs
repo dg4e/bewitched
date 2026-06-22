@@ -1,0 +1,1078 @@
+// UI rendering for `App` (textually included from app.rs, shares its scope).
+
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_bg(ctx);
+
+        egui::TopBottomPanel::top("menu").show(ctx, |ui| self.menu_bar(ui));
+        egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.status_bar(ui));
+
+        // Dialog windows.
+        self.search_window(ctx);
+        self.goto_window(ctx);
+        self.checksum_window(ctx);
+        self.stats_window(ctx);
+        self.export_window(ctx);
+        self.pattern_window(ctx);
+        self.tools_window(ctx);
+        self.about_window(ctx);
+        self.progress_window(ctx);
+
+        // Keyboard only when no text field is capturing it and no op running.
+        if !ctx.wants_keyboard_input() && self.bg.is_none() {
+            self.handle_keys(ctx);
+        }
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(theme::BG))
+            .show(ctx, |ui| self.hexview_ui(ui));
+    }
+}
+
+impl App {
+    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        egui::menu::bar(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("New").clicked() {
+                    self.new_doc();
+                    ui.close_menu();
+                }
+                if ui.button("Open file…   Ctrl+O").clicked() {
+                    self.open_dialog();
+                    ui.close_menu();
+                }
+                ui.menu_button("Open disk / RAM", |ui| {
+                    ui.label(egui::RichText::new("raw devices").color(theme::GREEN_DIM));
+                    ui.separator();
+                    for dev in raw_targets() {
+                        if ui.button(&dev.0).clicked() {
+                            self.open_path(PathBuf::from(&dev.1));
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new("opens a device/path raw;\nneeds privileges")
+                            .small()
+                            .color(theme::GREEN_DIM),
+                    );
+                });
+                ui.separator();
+                if ui.button("Save   Ctrl+S").clicked() {
+                    self.save();
+                    ui.close_menu();
+                }
+                if ui.button("Save as…").clicked() {
+                    self.save_as();
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Quit").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+
+            ui.menu_button("Edit", |ui| {
+                if ui.add_enabled(self.doc.can_undo(), egui::Button::new("Undo   Ctrl+Z")).clicked() {
+                    self.doc.undo();
+                    self.scroll_to_cursor = true;
+                    ui.close_menu();
+                }
+                if ui.add_enabled(self.doc.can_redo(), egui::Button::new("Redo   Ctrl+Y")).clicked() {
+                    self.doc.redo();
+                    self.scroll_to_cursor = true;
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Cut   Ctrl+X").clicked() {
+                    self.cut(ui.ctx());
+                    ui.close_menu();
+                }
+                if ui.button("Copy   Ctrl+C").clicked() {
+                    self.copy(ui.ctx());
+                    ui.close_menu();
+                }
+                if ui.button("Paste (insert)   Ctrl+V").clicked() {
+                    self.paste(false);
+                    ui.close_menu();
+                }
+                if ui.button("Paste (overwrite)").clicked() {
+                    self.paste(true);
+                    ui.close_menu();
+                }
+                if ui.button("Select all   Ctrl+A").clicked() {
+                    self.sel_anchor = Some(0);
+                    self.cursor = self.doc.len().saturating_sub(1);
+                    ui.close_menu();
+                }
+                ui.separator();
+                let mode_label = match self.mode {
+                    EditMode::Overwrite => "Mode: OVERWRITE  (Ins)",
+                    EditMode::Insert => "Mode: INSERT  (Ins)",
+                };
+                if ui.button(mode_label).clicked() {
+                    self.toggle_mode();
+                    ui.close_menu();
+                }
+            });
+
+            ui.menu_button("View", |ui| {
+                ui.label("Character set");
+                for cs in Charset::ALL {
+                    if ui.radio(self.charset == *cs, cs.name()).clicked() {
+                        self.charset = *cs;
+                    }
+                }
+                ui.separator();
+                ui.label("Byte grouping");
+                for g in [1usize, 2, 4, 8, 16] {
+                    if ui.radio(self.group == g, format!("{g} byte(s)")).clicked() {
+                        self.group = g;
+                    }
+                }
+                ui.separator();
+                ui.label("Columns (bytes/row)");
+                for c in [8usize, 16, 24, 32] {
+                    if ui.radio(self.bytes_per_row == c, format!("{c}")).clicked() {
+                        self.bytes_per_row = c;
+                    }
+                }
+                ui.separator();
+                if ui.radio(self.view_mode == ViewMode::Both, "Hex + text").clicked() {
+                    self.view_mode = ViewMode::Both;
+                }
+                if ui.radio(self.view_mode == ViewMode::HexOnly, "Hex only").clicked() {
+                    self.view_mode = ViewMode::HexOnly;
+                }
+                if ui.radio(self.view_mode == ViewMode::TextOnly, "Text only").clicked() {
+                    self.view_mode = ViewMode::TextOnly;
+                }
+            });
+
+            ui.menu_button("Search", |ui| {
+                if ui.button("Find / Replace…   Ctrl+F").clicked() {
+                    self.search.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Go to address…   Ctrl+G").clicked() {
+                    self.goto.open = true;
+                    ui.close_menu();
+                }
+            });
+
+            ui.menu_button("Tools", |ui| {
+                if ui.button("Checksums / digests…").clicked() {
+                    self.checksum.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Statistics / analysis…").clicked() {
+                    self.stats.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Export…").clicked() {
+                    self.export.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Insert byte pattern…").clicked() {
+                    self.pattern.open = true;
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("File tools (shred / split / concat / compare)…").clicked() {
+                    self.tools.open = true;
+                    ui.close_menu();
+                }
+            });
+
+            ui.menu_button("Help", |ui| {
+                if ui.button("About ganghex").clicked() {
+                    self.about_open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Find updates…").clicked() {
+                    self.status = "ganghex 0.1.0 — you are running the latest local build".into();
+                    ui.close_menu();
+                }
+            });
+
+            ui.separator();
+            ui.label(egui::RichText::new("ganghex").color(theme::GREEN).strong());
+        });
+    }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let modi = if self.doc.is_modified() { "*" } else { " " };
+            ui.label(
+                egui::RichText::new(format!("{}{}", modi, self.doc.label()))
+                    .color(theme::AMBER),
+            );
+            ui.separator();
+            ui.label(format!("offset {:#X} ({})", self.cursor, self.cursor));
+            ui.separator();
+            if self.cursor < self.doc.len() {
+                let b = self.byte_at(self.cursor);
+                ui.label(format!("byte {:02X} = {:3} = {:#010b}", b, b, b));
+            }
+            if let Some((s, e)) = self.selection_range() {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!("sel {:#X}..{:#X} ({} bytes)", s, e, e - s))
+                        .color(theme::AMBER),
+                );
+            }
+            ui.separator();
+            ui.label(format!("{}", human(self.doc.len())));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let mode = match self.mode {
+                    EditMode::Overwrite => "OVR",
+                    EditMode::Insert => "INS",
+                };
+                ui.label(egui::RichText::new(mode).color(theme::GREEN).strong());
+                ui.separator();
+                ui.label(egui::RichText::new(&self.status).color(theme::GREEN_DIM));
+            });
+        });
+    }
+
+    fn toggle_mode(&mut self) {
+        self.mode = match self.mode {
+            EditMode::Overwrite => EditMode::Insert,
+            EditMode::Insert => EditMode::Overwrite,
+        };
+    }
+
+    // ---- the hex view ----
+
+    fn hexview_ui(&mut self, ui: &mut egui::Ui) {
+        let font = theme::mono(13.0);
+        let char_w = ui.fonts(|f| f.glyph_width(&font, '0')).max(1.0);
+        let row_h = ui.fonts(|f| f.row_height(&font));
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+
+        let len = self.doc.len();
+        let bpr = self.bytes_per_row as u64;
+        let total_rows = (len / bpr + if len % bpr != 0 || len == 0 { 1 } else { 0 }) as usize;
+        let layout = Layout::new(self.bytes_per_row, self.group, len, self.view_mode);
+
+        self.page_rows = ((ui.available_height() / row_h) as usize).max(1);
+        let scroll_to = self.scroll_to_cursor;
+        self.scroll_to_cursor = false;
+        let cursor_row = (self.cursor / bpr) as usize;
+
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show_rows(ui, row_h, total_rows, |ui, range| {
+                for r in range {
+                    let base = r as u64 * bpr;
+                    let raw = self.doc.read_range(base, self.bytes_per_row);
+                    let bytes: Vec<Option<u8>> =
+                        (0..self.bytes_per_row).map(|i| raw.get(i).copied()).collect();
+                    let modified: Vec<bool> = (0..self.bytes_per_row)
+                        .map(|i| {
+                            let off = base + i as u64;
+                            off < len && self.doc.is_byte_modified(off)
+                        })
+                        .collect();
+                    let sel = self.selection_range();
+                    let selected: Vec<bool> = (0..self.bytes_per_row)
+                        .map(|i| {
+                            let off = base + i as u64;
+                            sel.map(|(s, e)| off >= s && off < e).unwrap_or(false)
+                        })
+                        .collect();
+                    let cursor = if self.cursor >= base && self.cursor < base + bpr {
+                        Some(((self.cursor - base) as usize, self.nibble, self.pane))
+                    } else {
+                        None
+                    };
+
+                    let ctx = hexview::RowCtx {
+                        bytes: &bytes,
+                        modified: &modified,
+                        selected: &selected,
+                        base_addr: base,
+                        charset: self.charset,
+                        cursor,
+                        editing_pane: self.pane,
+                        font: font.clone(),
+                    };
+                    let job = hexview::build_row(&layout, &ctx);
+                    let resp = ui.add(
+                        egui::Label::new(job)
+                            .sense(Sense::click_and_drag())
+                            .selectable(false),
+                    );
+
+                    if scroll_to && r == cursor_row {
+                        resp.scroll_to_me(Some(egui::Align::Center));
+                    }
+
+                    if (resp.clicked() || resp.dragged()) && self.bg.is_none() {
+                        if let Some(pos) = resp.interact_pointer_pos() {
+                            let relx = pos.x - resp.rect.left();
+                            let col = (relx / char_w).floor();
+                            if col >= 0.0 {
+                                if let Some((i, pane, nib)) = layout.col_to_byte(col as usize) {
+                                    let off = (base + i as u64).min(len);
+                                    let extend = resp.dragged();
+                                    self.click_to(off, pane, nib, extend);
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+    }
+
+    fn click_to(&mut self, off: u64, pane: Pane, nib: u8, extend: bool) {
+        if extend {
+            if self.sel_anchor.is_none() {
+                self.sel_anchor = Some(self.cursor);
+            }
+        } else {
+            self.sel_anchor = None;
+        }
+        self.cursor = off;
+        self.pane = pane;
+        self.nibble = nib;
+    }
+
+    // ---- keyboard ----
+
+    fn handle_keys(&mut self, ctx: &egui::Context) {
+        let events = ctx.input(|i| i.events.clone());
+        for ev in events {
+            match ev {
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => self.on_key(key, modifiers, ctx),
+                egui::Event::Text(t) => self.on_text(&t),
+                egui::Event::Paste(s) => {
+                    // Treat pasted text as hex if it looks like hex, else raw bytes.
+                    if let Ok(b) = pattern::parse_hex_pattern(&s) {
+                        self.clipboard = b;
+                    } else {
+                        self.clipboard = s.into_bytes();
+                    }
+                    self.paste(self.mode == EditMode::Overwrite);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn on_text(&mut self, t: &str) {
+        for ch in t.chars() {
+            match self.pane {
+                Pane::Hex => {
+                    if let Some(d) = ch.to_digit(16) {
+                        self.input_hex_nibble(d as u8);
+                    }
+                }
+                Pane::Text => {
+                    if !ch.is_control() && (ch as u32) < 0x100 {
+                        self.input_byte(ch as u8);
+                    }
+                }
+            }
+        }
+    }
+
+    fn on_key(&mut self, key: Key, m: egui::Modifiers, ctx: &egui::Context) {
+        let bpr = self.bytes_per_row as i64;
+        let cmd = m.command;
+        let shift = m.shift;
+
+        // Bookmarks: Ctrl+Shift+N set, Ctrl+N go.
+        if cmd {
+            if let Some(n) = digit_of(key) {
+                if shift {
+                    self.bookmarks[n] = Some(self.cursor);
+                    self.status = format!("bookmark {n} set at {:#X}", self.cursor);
+                } else if let Some(addr) = self.bookmarks[n] {
+                    self.set_cursor(addr, false);
+                    self.status = format!("jumped to bookmark {n}");
+                }
+                return;
+            }
+        }
+
+        if cmd {
+            match key {
+                Key::O => self.open_dialog(),
+                Key::S => self.save(),
+                Key::Z => {
+                    self.doc.undo();
+                    self.scroll_to_cursor = true;
+                }
+                Key::Y => {
+                    self.doc.redo();
+                    self.scroll_to_cursor = true;
+                }
+                Key::C => self.copy(ctx),
+                Key::X => self.cut(ctx),
+                Key::V => self.paste(self.mode == EditMode::Overwrite),
+                Key::F => self.search.open = true,
+                Key::G => self.goto.open = true,
+                Key::A => {
+                    self.sel_anchor = Some(0);
+                    self.cursor = self.doc.len().saturating_sub(1);
+                }
+                Key::ArrowLeft => self.nibble_move(-1),
+                Key::ArrowRight => self.nibble_move(1),
+                _ => {}
+            }
+            return;
+        }
+
+        match key {
+            Key::ArrowLeft => self.move_by(-1, shift),
+            Key::ArrowRight => self.move_by(1, shift),
+            Key::ArrowUp => self.move_by(-bpr, shift),
+            Key::ArrowDown => self.move_by(bpr, shift),
+            Key::PageUp => self.move_by(-(bpr * self.page_rows as i64), shift),
+            Key::PageDown => self.move_by(bpr * self.page_rows as i64, shift),
+            Key::Home => {
+                let row_start = self.cursor - (self.cursor % bpr as u64);
+                self.set_cursor(if shift { row_start } else { row_start }, shift);
+            }
+            Key::End => {
+                let row_end = (self.cursor - self.cursor % bpr as u64) + bpr as u64 - 1;
+                self.set_cursor(row_end.min(self.doc.len()), shift);
+            }
+            Key::Tab => {
+                self.pane = match self.pane {
+                    Pane::Hex => Pane::Text,
+                    Pane::Text => Pane::Hex,
+                };
+                self.nibble = 0;
+            }
+            Key::Insert => self.toggle_mode(),
+            Key::Backspace => self.backspace(),
+            Key::Delete => self.delete_forward(),
+            Key::Escape => self.clear_selection(),
+            _ => {}
+        }
+    }
+
+    fn nibble_move(&mut self, dir: i64) {
+        if dir > 0 {
+            if self.nibble == 0 {
+                self.nibble = 1;
+            } else {
+                self.nibble = 0;
+                self.cursor = (self.cursor + 1).min(self.doc.len());
+            }
+        } else if self.nibble == 1 {
+            self.nibble = 0;
+        } else if self.cursor > 0 {
+            self.cursor -= 1;
+            self.nibble = 1;
+        }
+        self.scroll_to_cursor = true;
+    }
+
+    // ---- dialogs ----
+
+    fn search_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.search.open;
+        egui::Window::new("Find / Replace")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                egui::ComboBox::from_label("Data type")
+                    .selected_text(TYPES[self.search.data_type].0)
+                    .show_ui(ui, |ui| {
+                        for (i, t) in TYPES.iter().enumerate() {
+                            ui.selectable_value(&mut self.search.data_type, i, t.0);
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.label("Find:   ");
+                    ui.text_edit_singleline(&mut self.search.needle);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Replace:");
+                    ui.text_edit_singleline(&mut self.search.replace);
+                });
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.search.case_insensitive, "Ignore case");
+                    ui.checkbox(&mut self.search.big_endian, "Big-endian");
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("◀ Find prev").clicked() {
+                        self.do_find(search::Direction::Backward);
+                    }
+                    if ui.button("Find next ▶").clicked() {
+                        self.do_find(search::Direction::Forward);
+                    }
+                    if ui.button("Find first").clicked() {
+                        self.do_find(search::Direction::All);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Replace & find").clicked() {
+                        self.do_replace_one();
+                    }
+                    if ui.button("Replace all").clicked() {
+                        self.do_replace_all();
+                    }
+                });
+                if !self.search.status.is_empty() {
+                    ui.separator();
+                    ui.label(egui::RichText::new(&self.search.status).color(theme::AMBER));
+                }
+            });
+        self.search.open = open;
+    }
+
+    fn needle_bytes(&self, which: &str) -> Result<Vec<u8>, String> {
+        let endian = if self.search.big_endian {
+            search::Endian::Big
+        } else {
+            search::Endian::Little
+        };
+        let s = if which == "find" {
+            &self.search.needle
+        } else {
+            &self.search.replace
+        };
+        search::needle_bytes(s, TYPES[self.search.data_type].1, endian, self.search.case_insensitive)
+    }
+
+    fn do_find(&mut self, dir: search::Direction) {
+        let needle = match self.needle_bytes("find") {
+            Ok(n) if !n.is_empty() => n,
+            Ok(_) => {
+                self.search.status = "empty search".into();
+                return;
+            }
+            Err(e) => {
+                self.search.status = e;
+                return;
+            }
+        };
+        let from = match dir {
+            search::Direction::Forward => self.cursor + 1,
+            search::Direction::Backward => self.cursor,
+            search::Direction::All => 0,
+        };
+        match search::find(&self.doc, &needle, from, dir, self.search.case_insensitive) {
+            Some(off) => {
+                self.cursor = off;
+                self.nibble = 0;
+                self.sel_anchor = Some(off);
+                self.cursor = off + needle.len() as u64 - 1;
+                self.scroll_to_cursor = true;
+                self.search.status = format!("match at {:#X}", off);
+            }
+            None => self.search.status = "not found".into(),
+        }
+    }
+
+    fn do_replace_one(&mut self) {
+        let (needle, repl) = match (self.needle_bytes("find"), self.needle_bytes("repl")) {
+            (Ok(n), Ok(r)) if !n.is_empty() => (n, r),
+            (Err(e), _) | (_, Err(e)) => {
+                self.search.status = e;
+                return;
+            }
+            _ => {
+                self.search.status = "empty search".into();
+                return;
+            }
+        };
+        if let Some((s, _)) = self.selection_range() {
+            let cur = self.doc.read_range(s, needle.len());
+            let eq = if self.search.case_insensitive {
+                cur.eq_ignore_ascii_case(&needle)
+            } else {
+                cur == needle
+            };
+            if eq {
+                self.doc.replace(s, needle.len() as u64, &repl);
+                self.cursor = s + repl.len() as u64;
+                self.sel_anchor = None;
+            }
+        }
+        self.do_find(search::Direction::Forward);
+    }
+
+    fn do_replace_all(&mut self) {
+        let (needle, repl) = match (self.needle_bytes("find"), self.needle_bytes("repl")) {
+            (Ok(n), Ok(r)) if !n.is_empty() => (n, r),
+            (Err(e), _) | (_, Err(e)) => {
+                self.search.status = e;
+                return;
+            }
+            _ => {
+                self.search.status = "empty search".into();
+                return;
+            }
+        };
+        let p = Progress::default();
+        let n = search::replace_all(&mut self.doc, &needle, &repl, self.search.case_insensitive, &p);
+        self.search.status = format!("replaced {n} occurrence(s)");
+        self.scroll_to_cursor = true;
+    }
+
+    fn goto_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.goto.open;
+        egui::Window::new("Go to address")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Address (0x.. hex, or decimal):");
+                let resp = ui.text_edit_singleline(&mut self.goto.text);
+                let go = ui.button("Go").clicked()
+                    || (resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
+                if go {
+                    match parse_addr(&self.goto.text) {
+                        Some(a) => {
+                            self.set_cursor(a.min(self.doc.len()), false);
+                            self.goto.status = format!("at {:#X}", a);
+                        }
+                        None => self.goto.status = "invalid address".into(),
+                    }
+                }
+                if !self.goto.status.is_empty() {
+                    ui.label(egui::RichText::new(&self.goto.status).color(theme::AMBER));
+                }
+            });
+        self.goto.open = open;
+    }
+
+    fn checksum_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.checksum.open;
+        egui::Window::new("Checksums / digests")
+            .open(&mut open)
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.checkbox(&mut self.checksum.whole_file, "Whole file (else selection)");
+                ui.separator();
+                egui::Grid::new("algos").num_columns(2).show(ui, |ui| {
+                    for (i, a) in checksum::Algo::ALL.iter().enumerate() {
+                        ui.checkbox(&mut self.checksum.selected[i], a.name());
+                        if i % 2 == 1 {
+                            ui.end_row();
+                        }
+                    }
+                });
+                ui.separator();
+                if ui.button("Compute").clicked() {
+                    let algos: Vec<checksum::Algo> = checksum::Algo::ALL
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| self.checksum.selected[*i])
+                        .map(|(_, a)| *a)
+                        .collect();
+                    let (off, len) = self.scope(self.checksum.whole_file);
+                    let reader = self.doc.reader();
+                    self.start_bg("computing digests", len, move |p| {
+                        BgOutcome::Checksum(checksum::compute(&reader, off, len, &algos, &p))
+                    });
+                }
+                ui.separator();
+                egui::Grid::new("results").num_columns(2).striped(true).show(ui, |ui| {
+                    for (a, v) in &self.checksum.results {
+                        ui.label(egui::RichText::new(a.name()).color(theme::ADDR));
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(v).color(theme::GREEN).monospace());
+                            if ui.small_button("copy").clicked() {
+                                ui.ctx().copy_text(v.clone());
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
+            });
+        self.checksum.open = open;
+    }
+
+    fn stats_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.stats.open;
+        egui::Window::new("Statistics / analysis")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                ui.checkbox(&mut self.stats.whole_file, "Whole file (else selection)");
+                if ui.button("Analyze").clicked() {
+                    let (off, len) = self.scope(self.stats.whole_file);
+                    let reader = self.doc.reader();
+                    self.start_bg("analyzing", len, move |p| {
+                        BgOutcome::Stats(Box::new(stats::analyze(&reader, off, len, &p)))
+                    });
+                }
+                ui.separator();
+                if let Some(s) = &self.stats.result {
+                    ui.label(format!("Total bytes : {}", s.total));
+                    ui.label(format!("Entropy     : {:.4} bits/byte (max 8)", s.entropy));
+                    ui.label(format!("Looks like  : {}", s.classify()));
+                    if let Some((b, c)) = s.most_common() {
+                        ui.label(format!("Most common : {:02X} ({} times)", b, c));
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new("byte distribution (0x00 → 0xFF)").color(theme::GREEN_DIM));
+                    draw_distribution(ui, &s.counts);
+                } else {
+                    ui.label(egui::RichText::new("run Analyze to see the distribution").color(theme::GREEN_DIM));
+                }
+            });
+        self.stats.open = open;
+    }
+
+    fn export_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.export.open;
+        egui::Window::new("Export")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                egui::ComboBox::from_label("Format")
+                    .selected_text(export::Format::ALL[self.export.fmt].name())
+                    .show_ui(ui, |ui| {
+                        for (i, f) in export::Format::ALL.iter().enumerate() {
+                            ui.selectable_value(&mut self.export.fmt, i, f.name());
+                        }
+                    });
+                ui.checkbox(&mut self.export.whole_file, "Whole file (else selection)");
+                ui.horizontal(|ui| {
+                    if ui.button("Preview").clicked() {
+                        self.export.preview = self.gen_export();
+                    }
+                    if ui.button("Copy to clipboard").clicked() {
+                        let s = self.gen_export();
+                        ui.ctx().copy_text(s.clone());
+                        self.export.preview = s;
+                    }
+                    if ui.button("Save to file…").clicked() {
+                        let s = self.gen_export();
+                        let ext = export::Format::ALL[self.export.fmt].extension();
+                        if let Some(p) = rfd::FileDialog::new().add_filter("export", &[ext]).save_file() {
+                            let _ = std::fs::write(&p, s.as_bytes());
+                            self.status = format!("exported to {}", p.display());
+                        }
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.export.preview.as_str())
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+            });
+        self.export.open = open;
+    }
+
+    fn gen_export(&self) -> String {
+        let (off, len) = self.scope(self.export.whole_file);
+        export::export(&self.doc, off, len, export::Format::ALL[self.export.fmt])
+    }
+
+    fn pattern_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.pattern.open;
+        egui::Window::new("Insert byte pattern")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Pattern (hex):");
+                    ui.text_edit_singleline(&mut self.pattern.hex);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Length (bytes):");
+                    ui.text_edit_singleline(&mut self.pattern.count);
+                });
+                ui.radio_value(&mut self.pattern.mode, 0, "Insert at cursor");
+                ui.radio_value(&mut self.pattern.mode, 1, "Overwrite at cursor");
+                ui.radio_value(&mut self.pattern.mode, 2, "Fill selection");
+                ui.separator();
+                if ui.button("Apply").clicked() {
+                    self.apply_pattern();
+                }
+            });
+        self.pattern.open = open;
+    }
+
+    fn apply_pattern(&mut self) {
+        let pat = match pattern::parse_hex_pattern(&self.pattern.hex) {
+            Ok(p) => p,
+            Err(e) => {
+                self.status = format!("pattern error: {e}");
+                return;
+            }
+        };
+        match self.pattern.mode {
+            2 => {
+                if let Some((s, e)) = self.selection_range() {
+                    let data = pattern::build(&pat, e - s);
+                    self.doc.overwrite(s, &data);
+                    self.status = format!("filled {} bytes", e - s);
+                } else {
+                    self.status = "no selection to fill".into();
+                }
+            }
+            mode => {
+                let count: u64 = self.pattern.count.trim().parse().unwrap_or(0);
+                let data = pattern::build(&pat, count);
+                if mode == 0 {
+                    self.doc.insert(self.cursor, &data);
+                } else {
+                    self.doc.overwrite(self.cursor, &data);
+                }
+                self.cursor += data.len() as u64;
+                self.status = format!("wrote {} bytes", data.len());
+            }
+        }
+        self.scroll_to_cursor = true;
+    }
+
+    fn tools_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.tools.open;
+        egui::Window::new("File tools")
+            .open(&mut open)
+            .resizable(false)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("Shredder — overwrite then delete").color(theme::GREEN));
+                ui.horizontal(|ui| {
+                    ui.label("Passes:");
+                    ui.text_edit_singleline(&mut self.tools.shred_passes);
+                    if ui.button("Pick & shred…").clicked() {
+                        if let Some(p) = rfd::FileDialog::new().pick_file() {
+                            let passes: u32 = self.tools.shred_passes.trim().parse().unwrap_or(3);
+                            let total = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                            self.start_bg("shredding", total * passes as u64, move |pr| {
+                                match fileops::shred(&p, passes, &pr) {
+                                    Ok(()) => BgOutcome::Message(format!("shredded {}", p.display())),
+                                    Err(e) => BgOutcome::Message(format!("shred failed: {e}")),
+                                }
+                            });
+                        }
+                    }
+                });
+                ui.label(egui::RichText::new("note: on SSD/CoW filesystems overwrite may not hit original blocks").small().color(theme::GREEN_DIM));
+                ui.separator();
+
+                ui.label(egui::RichText::new("Split file into parts").color(theme::GREEN));
+                ui.horizontal(|ui| {
+                    ui.label("Chunk size (bytes):");
+                    ui.text_edit_singleline(&mut self.tools.split_size);
+                    if ui.button("Pick & split…").clicked() {
+                        if let Some(p) = rfd::FileDialog::new().pick_file() {
+                            let size: u64 = self.tools.split_size.trim().parse().unwrap_or(1 << 20);
+                            let total = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                            self.start_bg("splitting", total, move |pr| {
+                                match fileops::split(&p, size.max(1), &pr) {
+                                    Ok(parts) => BgOutcome::Message(format!("split into {} parts", parts.len())),
+                                    Err(e) => BgOutcome::Message(format!("split failed: {e}")),
+                                }
+                            });
+                        }
+                    }
+                });
+                ui.separator();
+
+                ui.label(egui::RichText::new("Concatenate files").color(theme::GREEN));
+                ui.horizontal(|ui| {
+                    if ui.button("Pick inputs…").clicked() {
+                        if let Some(files) = rfd::FileDialog::new().pick_files() {
+                            self.tools.concat_inputs = files;
+                        }
+                    }
+                    ui.label(format!("{} file(s) selected", self.tools.concat_inputs.len()));
+                });
+                if ui.button("Concatenate to…").clicked() && !self.tools.concat_inputs.is_empty() {
+                    if let Some(out) = rfd::FileDialog::new().save_file() {
+                        let inputs = self.tools.concat_inputs.clone();
+                        let total: u64 = inputs.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum();
+                        self.start_bg("concatenating", total, move |pr| {
+                            match fileops::concat(&inputs, &out, &pr) {
+                                Ok(()) => BgOutcome::Message(format!("concatenated to {}", out.display())),
+                                Err(e) => BgOutcome::Message(format!("concat failed: {e}")),
+                            }
+                        });
+                    }
+                }
+                ui.separator();
+
+                ui.label(egui::RichText::new("Compare two files").color(theme::GREEN));
+                if ui.button("Pick A then B…").clicked() {
+                    if let (Some(a), Some(b)) = (
+                        rfd::FileDialog::new().set_title("Pick file A").pick_file(),
+                        rfd::FileDialog::new().set_title("Pick file B").pick_file(),
+                    ) {
+                        self.start_bg("comparing", 0, move |pr| match fileops::compare(&a, &b, &pr) {
+                            Ok(r) => {
+                                if r.equal {
+                                    BgOutcome::Message("files are identical".into())
+                                } else if let Some(d) = r.first_diff {
+                                    BgOutcome::Message(format!(
+                                        "differ at {:#X}; sizes {} vs {}",
+                                        d, r.len_a, r.len_b
+                                    ))
+                                } else {
+                                    BgOutcome::Message("files differ".into())
+                                }
+                            }
+                            Err(e) => BgOutcome::Message(format!("compare failed: {e}")),
+                        });
+                    }
+                }
+                if !self.tools.status.is_empty() {
+                    ui.label(&self.tools.status);
+                }
+            });
+        self.tools.open = open;
+    }
+
+    fn about_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.about_open;
+        egui::Window::new("About ganghex")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new("ganghex 0.1.0").heading().color(theme::GREEN));
+                ui.label("a fast, cross-platform, hacker-esque hex editor");
+                ui.label("for files, raw disks and RAM — up to 8 EB.");
+                ui.separator();
+                ui.label(egui::RichText::new("piece-table engine · mmap · unlimited undo").color(theme::GREEN_DIM));
+                ui.label(egui::RichText::new("egui · pure Rust").color(theme::GREEN_DIM));
+            });
+        self.about_open = open;
+    }
+
+    fn progress_window(&mut self, ctx: &egui::Context) {
+        let Some(task) = &self.bg else { return };
+        let frac = task.progress.fraction();
+        let elapsed = task.started.elapsed().as_secs_f32();
+        let eta = if frac > 0.001 {
+            elapsed * (1.0 - frac) / frac
+        } else {
+            f32::NAN
+        };
+        let label = task.label.clone();
+        let mut cancel = false;
+        egui::Window::new("working…")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(egui::RichText::new(&label).color(theme::AMBER));
+                ui.add(egui::ProgressBar::new(frac).show_percentage().desired_width(320.0));
+                ui.label(format!(
+                    "elapsed {:.1}s   ·   remaining {}",
+                    elapsed,
+                    if eta.is_finite() {
+                        format!("{:.1}s", eta)
+                    } else {
+                        "…".into()
+                    }
+                ));
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        if cancel {
+            if let Some(t) = &self.bg {
+                t.progress.cancel();
+            }
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(60));
+    }
+}
+
+// ---- free helpers ----
+
+fn digit_of(key: Key) -> Option<usize> {
+    Some(match key {
+        Key::Num0 => 0,
+        Key::Num1 => 1,
+        Key::Num2 => 2,
+        Key::Num3 => 3,
+        Key::Num4 => 4,
+        Key::Num5 => 5,
+        Key::Num6 => 6,
+        Key::Num7 => 7,
+        Key::Num8 => 8,
+        Key::Num9 => 9,
+        _ => return None,
+    })
+}
+
+fn parse_addr(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(h, 16).ok()
+    } else if s.chars().all(|c| c.is_ascii_hexdigit()) && s.chars().any(|c| c.is_ascii_alphabetic()) {
+        u64::from_str_radix(s, 16).ok()
+    } else {
+        s.parse::<u64>().ok().or_else(|| u64::from_str_radix(s, 16).ok())
+    }
+}
+
+fn draw_distribution(ui: &mut egui::Ui, counts: &[u64; 256]) {
+    let max = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
+    let h = 120.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width().min(528.0), h), Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, theme::PANEL);
+    let bw = rect.width() / 256.0;
+    for (i, &c) in counts.iter().enumerate() {
+        if c == 0 {
+            continue;
+        }
+        let bh = (c as f32 / max) * (h - 2.0);
+        let x = rect.left() + i as f32 * bw;
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(x, rect.bottom() - bh),
+            egui::pos2(x + bw.max(1.0), rect.bottom()),
+        );
+        let color = if i == 0 || i == 0xff {
+            theme::AMBER
+        } else if (0x20..0x7f).contains(&i) {
+            theme::GREEN
+        } else {
+            theme::GREEN_DIM
+        };
+        painter.rect_filled(bar, 0.0, color);
+    }
+}
+
+/// Platform-specific raw device targets offered in the File menu.
+fn raw_targets() -> Vec<(String, String)> {
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            ("Whole disk 0 (/dev/rdisk0)".into(), "/dev/rdisk0".into()),
+            ("Disk 1 (/dev/rdisk1)".into(), "/dev/rdisk1".into()),
+        ]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        vec![
+            ("First disk (/dev/sda)".into(), "/dev/sda".into()),
+            ("NVMe 0 (/dev/nvme0n1)".into(), "/dev/nvme0n1".into()),
+            ("Physical RAM (/dev/mem)".into(), "/dev/mem".into()),
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            ("Physical drive 0".into(), "\\\\.\\PhysicalDrive0".into()),
+            ("Volume C:".into(), "\\\\.\\C:".into()),
+        ]
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        Vec::new()
+    }
+}

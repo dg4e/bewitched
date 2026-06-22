@@ -1,0 +1,523 @@
+//! The ganghex application: state, menus, the interactive hex view and dialogs.
+
+use std::path::PathBuf;
+use std::thread::JoinHandle;
+use std::time::Instant;
+
+use egui::{Key, Sense};
+
+use crate::data::Document;
+use crate::ops::{checksum, export, fileops, pattern, search, stats, Progress};
+
+use super::charset::Charset;
+use super::hexview::{self, Layout, Pane, ViewMode};
+use super::theme;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditMode {
+    Overwrite,
+    Insert,
+}
+
+/// Outcome delivered from a background worker thread back to the UI.
+enum BgOutcome {
+    Checksum(Vec<(checksum::Algo, String)>),
+    Stats(Box<stats::Stats>),
+    Message(String),
+}
+
+struct BgTask {
+    label: String,
+    progress: Progress,
+    started: Instant,
+    handle: Option<JoinHandle<BgOutcome>>,
+}
+
+#[derive(Default)]
+struct SearchState {
+    open: bool,
+    needle: String,
+    replace: String,
+    data_type: usize, // index into TYPES
+    big_endian: bool,
+    case_insensitive: bool,
+    status: String,
+}
+
+const TYPES: &[(&str, search::DataType)] = &[
+    ("Text", search::DataType::Text),
+    ("Unicode (UTF-16)", search::DataType::Utf16),
+    ("Hex values", search::DataType::Hex),
+    ("Int8", search::DataType::I8),
+    ("Int16", search::DataType::I16),
+    ("Int32", search::DataType::I32),
+    ("Int64", search::DataType::I64),
+    ("Float32", search::DataType::F32),
+    ("Float64", search::DataType::F64),
+];
+
+#[derive(Default)]
+struct GotoState {
+    open: bool,
+    text: String,
+    status: String,
+}
+
+struct ChecksumState {
+    open: bool,
+    selected: Vec<bool>,
+    results: Vec<(checksum::Algo, String)>,
+    whole_file: bool,
+}
+
+impl Default for ChecksumState {
+    fn default() -> Self {
+        let mut selected = vec![false; checksum::Algo::ALL.len()];
+        // sensible defaults: CRC-32, MD5, SHA-1, SHA-256
+        for (i, a) in checksum::Algo::ALL.iter().enumerate() {
+            selected[i] = matches!(
+                a,
+                checksum::Algo::Crc32
+                    | checksum::Algo::Md5
+                    | checksum::Algo::Sha1
+                    | checksum::Algo::Sha256
+            );
+        }
+        Self {
+            open: false,
+            selected,
+            results: Vec::new(),
+            whole_file: true,
+        }
+    }
+}
+
+#[derive(Default)]
+struct StatsState {
+    open: bool,
+    result: Option<stats::Stats>,
+    whole_file: bool,
+}
+
+struct ExportState {
+    open: bool,
+    fmt: usize,
+    whole_file: bool,
+    preview: String,
+}
+
+impl Default for ExportState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            fmt: 0,
+            whole_file: false,
+            preview: String::new(),
+        }
+    }
+}
+
+struct PatternState {
+    open: bool,
+    hex: String,
+    count: String,
+    mode: usize, // 0 insert, 1 overwrite, 2 fill selection
+}
+
+impl Default for PatternState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            hex: "00".into(),
+            count: "16".into(),
+            mode: 0,
+        }
+    }
+}
+
+struct ToolsState {
+    open: bool,
+    shred_passes: String,
+    split_size: String,
+    concat_inputs: Vec<PathBuf>,
+    status: String,
+}
+
+impl Default for ToolsState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            shred_passes: "3".into(),
+            split_size: "1048576".into(),
+            concat_inputs: Vec::new(),
+            status: String::new(),
+        }
+    }
+}
+
+pub struct App {
+    doc: Document,
+    cursor: u64,
+    nibble: u8, // 0 = high, 1 = low (hex pane)
+    sel_anchor: Option<u64>,
+    mode: EditMode,
+    pane: Pane,
+    bytes_per_row: usize,
+    group: usize,
+    view_mode: ViewMode,
+    charset: Charset,
+    bookmarks: [Option<u64>; 10],
+    clipboard: Vec<u8>,
+    status: String,
+    scroll_to_cursor: bool,
+    page_rows: usize,
+
+    bg: Option<BgTask>,
+
+    search: SearchState,
+    goto: GotoState,
+    checksum: ChecksumState,
+    stats: StatsState,
+    export: ExportState,
+    pattern: PatternState,
+    tools: ToolsState,
+    about_open: bool,
+}
+
+impl App {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        theme::install(&cc.egui_ctx);
+        Self {
+            doc: Document::empty(),
+            cursor: 0,
+            nibble: 0,
+            sel_anchor: None,
+            mode: EditMode::Overwrite,
+            pane: Pane::Hex,
+            bytes_per_row: 16,
+            group: 1,
+            view_mode: ViewMode::Both,
+            charset: Charset::Ansi,
+            bookmarks: [None; 10],
+            clipboard: Vec::new(),
+            status: "ready — open a file, disk, or start typing".into(),
+            scroll_to_cursor: false,
+            page_rows: 16,
+            bg: None,
+            search: SearchState {
+                data_type: 0,
+                ..Default::default()
+            },
+            goto: GotoState::default(),
+            checksum: ChecksumState::default(),
+            stats: StatsState::default(),
+            export: ExportState::default(),
+            pattern: PatternState::default(),
+            tools: ToolsState::default(),
+            about_open: false,
+        }
+    }
+
+    // ---- document lifecycle ----
+
+    fn new_doc(&mut self) {
+        self.doc = Document::empty();
+        self.reset_cursor();
+        self.status = "new empty document".into();
+    }
+
+    fn open_path(&mut self, path: PathBuf) {
+        match Document::open_file(&path) {
+            Ok(d) => {
+                self.doc = d;
+                self.reset_cursor();
+                self.status = format!("opened {} ({})", path.display(), human(self.doc.len()));
+            }
+            Err(e) => self.status = format!("open failed: {e}"),
+        }
+    }
+
+    fn open_dialog(&mut self) {
+        if let Some(p) = rfd::FileDialog::new().pick_file() {
+            self.open_path(p);
+        }
+    }
+
+    fn save(&mut self) {
+        if let Some(p) = self.doc.path.clone() {
+            match self.doc.save_to(&p) {
+                Ok(()) => self.status = format!("saved {}", p.display()),
+                Err(e) => self.status = format!("save failed: {e}"),
+            }
+        } else {
+            self.save_as();
+        }
+    }
+
+    fn save_as(&mut self) {
+        if let Some(p) = rfd::FileDialog::new().save_file() {
+            match self.doc.save_to(&p) {
+                Ok(()) => self.status = format!("saved {}", p.display()),
+                Err(e) => self.status = format!("save failed: {e}"),
+            }
+        }
+    }
+
+    fn reset_cursor(&mut self) {
+        self.cursor = 0;
+        self.nibble = 0;
+        self.sel_anchor = None;
+        self.scroll_to_cursor = true;
+    }
+
+    // ---- selection helpers ----
+
+    fn selection(&self) -> Option<(u64, u64)> {
+        self.sel_anchor.map(|a| {
+            if a <= self.cursor {
+                (a, self.cursor)
+            } else {
+                (self.cursor, a)
+            }
+        })
+    }
+
+    /// Inclusive selection as [start, end_exclusive).
+    fn selection_range(&self) -> Option<(u64, u64)> {
+        self.selection().map(|(a, b)| (a, (b + 1).min(self.doc.len())))
+    }
+
+    fn clear_selection(&mut self) {
+        self.sel_anchor = None;
+    }
+
+    fn delete_selection(&mut self) -> bool {
+        if let Some((s, e)) = self.selection_range() {
+            self.doc.delete(s, e - s);
+            self.cursor = s.min(self.doc.len().saturating_sub(1));
+            self.nibble = 0;
+            self.sel_anchor = None;
+            self.scroll_to_cursor = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    // ---- cursor movement ----
+
+    fn set_cursor(&mut self, pos: u64, extend: bool) {
+        let max = self.doc.len(); // allow one-past-end for insert
+        let pos = pos.min(max);
+        if extend {
+            if self.sel_anchor.is_none() {
+                self.sel_anchor = Some(self.cursor);
+            }
+        } else {
+            self.sel_anchor = None;
+        }
+        self.cursor = pos;
+        self.nibble = 0;
+        self.scroll_to_cursor = true;
+    }
+
+    fn move_by(&mut self, delta: i64, extend: bool) {
+        let cur = self.cursor as i64;
+        let np = (cur + delta).clamp(0, self.doc.len() as i64);
+        self.set_cursor(np as u64, extend);
+    }
+
+    // ---- editing ----
+
+    fn byte_at(&self, off: u64) -> u8 {
+        let mut b = [0u8; 1];
+        if self.doc.read_at(off, &mut b) == 1 {
+            b[0]
+        } else {
+            0
+        }
+    }
+
+    fn input_hex_nibble(&mut self, d: u8) {
+        self.delete_selection();
+        match self.mode {
+            EditMode::Overwrite => {
+                let b = self.byte_at(self.cursor);
+                let nb = if self.nibble == 0 {
+                    (b & 0x0f) | (d << 4)
+                } else {
+                    (b & 0xf0) | d
+                };
+                self.doc.overwrite(self.cursor, &[nb]);
+                if self.nibble == 0 {
+                    self.nibble = 1;
+                } else {
+                    self.nibble = 0;
+                    self.cursor = (self.cursor + 1).min(self.doc.len());
+                }
+            }
+            EditMode::Insert => {
+                if self.nibble == 0 {
+                    self.doc.insert(self.cursor, &[d << 4]);
+                    self.nibble = 1;
+                } else {
+                    let b = self.byte_at(self.cursor);
+                    self.doc.overwrite(self.cursor, &[(b & 0xf0) | d]);
+                    self.nibble = 0;
+                    self.cursor += 1;
+                }
+            }
+        }
+        self.scroll_to_cursor = true;
+    }
+
+    fn input_byte(&mut self, byte: u8) {
+        self.delete_selection();
+        match self.mode {
+            EditMode::Overwrite => self.doc.overwrite(self.cursor, &[byte]),
+            EditMode::Insert => self.doc.insert(self.cursor, &[byte]),
+        }
+        self.cursor += 1;
+        self.nibble = 0;
+        self.scroll_to_cursor = true;
+    }
+
+    fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        if self.cursor > 0 {
+            self.doc.delete(self.cursor - 1, 1);
+            self.cursor -= 1;
+            self.nibble = 0;
+            self.scroll_to_cursor = true;
+        }
+    }
+
+    fn delete_forward(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        if self.cursor < self.doc.len() {
+            self.doc.delete(self.cursor, 1);
+            self.scroll_to_cursor = true;
+        }
+    }
+
+    fn copy(&mut self, ctx: &egui::Context) {
+        if let Some((s, e)) = self.selection_range() {
+            self.clipboard = self.doc.read_range(s, (e - s) as usize);
+            let hex: Vec<String> = self.clipboard.iter().map(|b| format!("{:02X}", b)).collect();
+            ctx.copy_text(hex.join(" "));
+            self.status = format!("copied {} bytes", self.clipboard.len());
+        }
+    }
+
+    fn cut(&mut self, ctx: &egui::Context) {
+        self.copy(ctx);
+        self.delete_selection();
+    }
+
+    fn paste(&mut self, write: bool) {
+        if self.clipboard.is_empty() {
+            return;
+        }
+        self.delete_selection();
+        let data = self.clipboard.clone();
+        if write {
+            self.doc.overwrite(self.cursor, &data);
+        } else {
+            self.doc.insert(self.cursor, &data);
+        }
+        self.cursor += data.len() as u64;
+        self.scroll_to_cursor = true;
+        self.status = format!("pasted {} bytes", data.len());
+    }
+
+    // ---- background tasks ----
+
+    fn poll_bg(&mut self, ctx: &egui::Context) {
+        let done = self
+            .bg
+            .as_ref()
+            .map(|b| b.handle.as_ref().map(|h| h.is_finished()).unwrap_or(true))
+            .unwrap_or(false);
+        if done {
+            if let Some(mut task) = self.bg.take() {
+                if let Some(h) = task.handle.take() {
+                    if let Ok(outcome) = h.join() {
+                        self.apply_outcome(outcome);
+                    }
+                }
+            }
+        }
+        if self.bg.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(60));
+        }
+    }
+
+    fn apply_outcome(&mut self, outcome: BgOutcome) {
+        match outcome {
+            BgOutcome::Checksum(v) => {
+                self.checksum.results = v;
+                self.status = "checksums computed".into();
+            }
+            BgOutcome::Stats(s) => {
+                self.status = format!(
+                    "analysis: {} bytes, entropy {:.3} bits/byte, looks like {}",
+                    s.total,
+                    s.entropy,
+                    s.classify()
+                );
+                self.stats.result = Some(*s);
+            }
+            BgOutcome::Message(m) => self.status = m,
+        }
+    }
+
+    fn start_bg<F>(&mut self, label: impl Into<String>, total: u64, f: F)
+    where
+        F: FnOnce(Progress) -> BgOutcome + Send + 'static,
+    {
+        if self.bg.is_some() {
+            self.status = "an operation is already running".into();
+            return;
+        }
+        let progress = Progress::new(total);
+        let p2 = progress.clone();
+        let handle = std::thread::spawn(move || f(p2));
+        self.bg = Some(BgTask {
+            label: label.into(),
+            progress,
+            started: Instant::now(),
+            handle: Some(handle),
+        });
+    }
+
+    fn scope(&self, whole_file: bool) -> (u64, u64) {
+        if whole_file {
+            (0, self.doc.len())
+        } else if let Some((s, e)) = self.selection_range() {
+            (s, e - s)
+        } else {
+            (0, self.doc.len())
+        }
+    }
+}
+
+fn human(n: u64) -> String {
+    const U: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+    let mut f = n as f64;
+    let mut i = 0;
+    while f >= 1024.0 && i < U.len() - 1 {
+        f /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} {}", U[0])
+    } else {
+        format!("{f:.2} {} ({n} bytes)", U[i])
+    }
+}
+
+include!("app_ui.rs");

@@ -1,0 +1,205 @@
+//! Checksums, CRCs and cryptographic digests over a document range.
+
+use crate::data::ByteReader;
+use md5::Digest as _;
+
+use super::Progress;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Algo {
+    Checksum8,
+    Checksum16,
+    Checksum32,
+    Adler32,
+    Crc16,
+    Crc32,
+    Crc64,
+    Md5,
+    Sha1,
+    Sha256,
+    Sha512,
+}
+
+impl Algo {
+    pub const ALL: &'static [Algo] = &[
+        Algo::Checksum8,
+        Algo::Checksum16,
+        Algo::Checksum32,
+        Algo::Adler32,
+        Algo::Crc16,
+        Algo::Crc32,
+        Algo::Crc64,
+        Algo::Md5,
+        Algo::Sha1,
+        Algo::Sha256,
+        Algo::Sha512,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Algo::Checksum8 => "Checksum-8",
+            Algo::Checksum16 => "Checksum-16",
+            Algo::Checksum32 => "Checksum-32",
+            Algo::Adler32 => "Adler-32",
+            Algo::Crc16 => "CRC-16/ARC",
+            Algo::Crc32 => "CRC-32",
+            Algo::Crc64 => "CRC-64/XZ",
+            Algo::Md5 => "MD5",
+            Algo::Sha1 => "SHA-1",
+            Algo::Sha256 => "SHA-256",
+            Algo::Sha512 => "SHA-512",
+        }
+    }
+}
+
+/// Streaming digest engine that can be fed chunks.
+enum Engine {
+    Sum8(u8),
+    Sum16(u16),
+    Sum32(u32),
+    Adler(adler::Adler32),
+    Crc16(crc::Digest<'static, u16>),
+    Crc32(crc32fast::Hasher),
+    Crc64(crc::Digest<'static, u64>),
+    Md5(md5::Md5),
+    Sha1(sha1::Sha1),
+    Sha256(sha2::Sha256),
+    Sha512(sha2::Sha512),
+}
+
+static CRC16_ARC: crc::Crc<u16> = crc::Crc::<u16>::new(&crc::CRC_16_ARC);
+static CRC64_XZ: crc::Crc<u64> = crc::Crc::<u64>::new(&crc::CRC_64_XZ);
+
+impl Engine {
+    fn new(algo: Algo) -> Self {
+        match algo {
+            Algo::Checksum8 => Engine::Sum8(0),
+            Algo::Checksum16 => Engine::Sum16(0),
+            Algo::Checksum32 => Engine::Sum32(0),
+            Algo::Adler32 => Engine::Adler(adler::Adler32::new()),
+            Algo::Crc16 => Engine::Crc16(CRC16_ARC.digest()),
+            Algo::Crc32 => Engine::Crc32(crc32fast::Hasher::new()),
+            Algo::Crc64 => Engine::Crc64(CRC64_XZ.digest()),
+            Algo::Md5 => Engine::Md5(md5::Md5::new()),
+            Algo::Sha1 => Engine::Sha1(sha1::Sha1::new()),
+            Algo::Sha256 => Engine::Sha256(sha2::Sha256::new()),
+            Algo::Sha512 => Engine::Sha512(sha2::Sha512::new()),
+        }
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        match self {
+            Engine::Sum8(s) => {
+                for &b in data {
+                    *s = s.wrapping_add(b);
+                }
+            }
+            Engine::Sum16(s) => {
+                for &b in data {
+                    *s = s.wrapping_add(b as u16);
+                }
+            }
+            Engine::Sum32(s) => {
+                for &b in data {
+                    *s = s.wrapping_add(b as u32);
+                }
+            }
+            Engine::Adler(a) => a.write_slice(data),
+            Engine::Crc16(d) => d.update(data),
+            Engine::Crc32(h) => h.update(data),
+            Engine::Crc64(d) => d.update(data),
+            Engine::Md5(h) => h.update(data),
+            Engine::Sha1(h) => h.update(data),
+            Engine::Sha256(h) => h.update(data),
+            Engine::Sha512(h) => h.update(data),
+        }
+    }
+
+    fn finish(self) -> String {
+        fn hexstr(b: &[u8]) -> String {
+            let mut s = String::with_capacity(b.len() * 2);
+            for &x in b {
+                s.push_str(&format!("{:02x}", x));
+            }
+            s
+        }
+        match self {
+            Engine::Sum8(s) => format!("{:02X}", s),
+            Engine::Sum16(s) => format!("{:04X}", s),
+            Engine::Sum32(s) => format!("{:08X}", s),
+            Engine::Adler(a) => format!("{:08X}", a.checksum()),
+            Engine::Crc16(d) => format!("{:04X}", d.finalize()),
+            Engine::Crc32(h) => format!("{:08X}", h.finalize()),
+            Engine::Crc64(d) => format!("{:016X}", d.finalize()),
+            Engine::Md5(h) => hexstr(&h.finalize()),
+            Engine::Sha1(h) => hexstr(&h.finalize()),
+            Engine::Sha256(h) => hexstr(&h.finalize()),
+            Engine::Sha512(h) => hexstr(&h.finalize()),
+        }
+    }
+}
+
+/// Compute several algorithms over `[offset, offset+len)` in a single streaming
+/// pass. Honors progress/cancel. Returns (algo, hex-string) pairs.
+pub fn compute(
+    doc: &dyn ByteReader,
+    offset: u64,
+    len: u64,
+    algos: &[Algo],
+    progress: &Progress,
+) -> Vec<(Algo, String)> {
+    let end = (offset + len).min(doc.len());
+    progress.set_total(end.saturating_sub(offset));
+    let mut engines: Vec<Engine> = algos.iter().map(|a| Engine::new(*a)).collect();
+    let mut pos = offset;
+    let mut buf = vec![0u8; 1 << 20];
+    while pos < end {
+        if progress.is_cancelled() {
+            break;
+        }
+        let want = ((end - pos) as usize).min(buf.len());
+        let n = doc.read_at(pos, &mut buf[..want]);
+        if n == 0 {
+            break;
+        }
+        for e in &mut engines {
+            e.update(&buf[..n]);
+        }
+        pos += n as u64;
+        progress.set_done(pos - offset);
+    }
+    progress.finish();
+    algos
+        .iter()
+        .copied()
+        .zip(engines.into_iter().map(|e| e.finish()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{Document, MemSource};
+    use std::sync::Arc;
+
+    #[test]
+    fn known_vectors() {
+        let doc = Document::from_source(Arc::new(MemSource::new(b"abc".to_vec(), "t")));
+        let p = Progress::default();
+        let r = compute(
+            &doc,
+            0,
+            doc.len(),
+            &[Algo::Md5, Algo::Sha1, Algo::Crc32, Algo::Sha256],
+            &p,
+        );
+        let map: std::collections::HashMap<_, _> = r.into_iter().collect();
+        assert_eq!(map[&Algo::Md5], "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(map[&Algo::Sha1], "a9993e364706816aba3e25717850c26c9cd0d89d");
+        assert_eq!(
+            map[&Algo::Sha256],
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(map[&Algo::Crc32], "352441C2");
+    }
+}
