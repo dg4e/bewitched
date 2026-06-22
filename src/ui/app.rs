@@ -8,7 +8,8 @@ use egui::{Key, Sense};
 
 use crate::data::{Document, Region, RowItem, ViewMap};
 use crate::ops::{
-    checksum, export, fileops, inspect, pattern, search, stats, strings, transform, Progress,
+    checksum, export, fileops, inspect, patch, pattern, scan, search, stats, strings, transform,
+    Progress,
 };
 
 use super::charset::Charset;
@@ -26,6 +27,7 @@ enum BgOutcome {
     Checksum(Vec<(checksum::Algo, String)>),
     Stats(Box<stats::Stats>),
     Strings(Vec<strings::Found>),
+    Scan(Vec<scan::Match>),
     Message(String),
 }
 
@@ -154,6 +156,30 @@ struct StringsState {
     results: Vec<strings::Found>,
 }
 
+struct ScanState {
+    open: bool,
+    data_type: usize, // index into TYPES
+    big_endian: bool,
+    aligned: bool,
+    value: String,
+    matches: Vec<scan::Match>,
+    status: String,
+}
+
+impl Default for ScanState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            data_type: 5, // Int32
+            big_endian: false,
+            aligned: true,
+            value: String::new(),
+            matches: Vec::new(),
+            status: String::new(),
+        }
+    }
+}
+
 struct ToolsState {
     open: bool,
     shred_passes: String,
@@ -203,6 +229,7 @@ pub struct App {
     tools: ToolsState,
     transform: TransformState,
     strings: StringsState,
+    scan: ScanState,
     inspector_open: bool,
     inspector_le: bool,
     regions_open: bool,
@@ -259,6 +286,7 @@ impl App {
                 whole_file: true,
                 ..Default::default()
             },
+            scan: ScanState::default(),
             inspector_open: true,
             inspector_le: true,
             regions_open: false,
@@ -389,6 +417,129 @@ impl App {
         self.start_bg("scanning for strings", len, move |p| {
             BgOutcome::Strings(strings::extract(&reader, off, len, min_len, 100_000, &p))
         });
+    }
+
+    // ---- value scanner ----
+
+    fn scan_needle(&self) -> Result<Vec<u8>, String> {
+        let endian = if self.scan.big_endian {
+            search::Endian::Big
+        } else {
+            search::Endian::Little
+        };
+        search::needle_bytes(&self.scan.value, TYPES[self.scan.data_type].1, endian, false)
+    }
+
+    fn scan_endian(&self) -> search::Endian {
+        if self.scan.big_endian {
+            search::Endian::Big
+        } else {
+            search::Endian::Little
+        }
+    }
+
+    fn do_first_scan(&mut self) {
+        let needle = match self.scan_needle() {
+            Ok(n) if !n.is_empty() => n,
+            Ok(_) => {
+                self.scan.status = "enter a value".into();
+                return;
+            }
+            Err(e) => {
+                self.scan.status = e;
+                return;
+            }
+        };
+        let align = if self.scan.aligned { needle.len() as u64 } else { 1 };
+        let reader = self.doc.reader();
+        self.start_bg("scanning for value", self.doc.len(), move |p| {
+            BgOutcome::Scan(scan::first_scan(&reader, &needle, align, 1_000_000, &p))
+        });
+    }
+
+    fn do_refine(&mut self, refine: scan::Refine) {
+        if self.scan.matches.is_empty() {
+            self.scan.status = "run First scan first".into();
+            return;
+        }
+        let ty = TYPES[self.scan.data_type].1;
+        let endian = self.scan_endian();
+        let prev = std::mem::take(&mut self.scan.matches);
+        self.scan.matches = scan::refine(&self.doc, &prev, &refine, ty, endian);
+        self.scan.status = format!("{} match(es)", self.scan.matches.len());
+    }
+
+    fn poke_value(&mut self) {
+        let needle = match self.scan_needle() {
+            Ok(n) if !n.is_empty() => n,
+            _ => {
+                self.scan.status = "enter a value to write".into();
+                return;
+            }
+        };
+        let offsets: Vec<u64> = self.scan.matches.iter().map(|m| m.offset).collect();
+        for off in &offsets {
+            self.doc.overwrite(*off, &needle);
+        }
+        self.scan.status = format!("wrote value to {} location(s)", offsets.len());
+        self.scroll_to_cursor = true;
+    }
+
+    // ---- IPS patches ----
+
+    fn create_ips(&mut self) {
+        let Some(orig_path) = rfd::FileDialog::new()
+            .set_title("Pick the ORIGINAL (unpatched) file")
+            .pick_file()
+        else {
+            return;
+        };
+        let original = match std::fs::read(&orig_path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("read failed: {e}");
+                return;
+            }
+        };
+        let modified = self.doc.to_vec();
+        match patch::make_ips(&original, &modified) {
+            Ok(p) => {
+                if let Some(out) = rfd::FileDialog::new().add_filter("IPS", &["ips"]).save_file() {
+                    match std::fs::write(&out, &p) {
+                        Ok(()) => self.status = format!("wrote IPS patch ({} bytes)", p.len()),
+                        Err(e) => self.status = format!("write failed: {e}"),
+                    }
+                }
+            }
+            Err(e) => self.status = format!("patch failed: {e}"),
+        }
+    }
+
+    fn apply_ips(&mut self) {
+        let Some(patch_path) = rfd::FileDialog::new()
+            .add_filter("IPS", &["ips"])
+            .set_title("Pick an IPS patch")
+            .pick_file()
+        else {
+            return;
+        };
+        let bytes = match std::fs::read(&patch_path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("read failed: {e}");
+                return;
+            }
+        };
+        match patch::parse_ips(&bytes) {
+            Ok(writes) => {
+                for w in &writes {
+                    self.doc.overwrite(w.offset, &w.data);
+                }
+                self.status = format!("applied IPS patch ({} record(s))", writes.len());
+                self.scroll_to_cursor = true;
+            }
+            Err(e) => self.status = format!("invalid patch: {e}"),
+        }
     }
 
     // ---- printing ----
@@ -616,6 +767,11 @@ impl App {
             BgOutcome::Strings(found) => {
                 self.status = format!("found {} string(s)", found.len());
                 self.strings.results = found;
+            }
+            BgOutcome::Scan(matches) => {
+                self.scan.status = format!("{} match(es)", matches.len());
+                self.status = self.scan.status.clone();
+                self.scan.matches = matches;
             }
             BgOutcome::Message(m) => self.status = m,
         }

@@ -17,6 +17,7 @@ impl eframe::App for App {
         self.tools_window(ctx);
         self.transform_window(ctx);
         self.strings_window(ctx);
+        self.scan_window(ctx);
         self.regions_window(ctx);
         self.about_window(ctx);
         self.progress_window(ctx);
@@ -75,6 +76,15 @@ impl App {
                 ui.separator();
                 if ui.button("Print…   (opens hex dump in default viewer)").clicked() {
                     self.print();
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Create IPS patch…   (diff vs original)").clicked() {
+                    self.create_ips();
+                    ui.close_menu();
+                }
+                if ui.button("Apply IPS patch…").clicked() {
+                    self.apply_ips();
                     ui.close_menu();
                 }
                 ui.separator();
@@ -214,6 +224,10 @@ impl App {
                 }
                 if ui.button("Extract strings…").clicked() {
                     self.strings.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Value scanner (memory/save editing)…").clicked() {
+                    self.scan.open = true;
                     ui.close_menu();
                 }
                 ui.separator();
@@ -1228,6 +1242,118 @@ impl App {
         self.strings.open = open;
     }
 
+    fn scan_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.scan.open;
+        let mut jump: Option<u64> = None;
+        egui::Window::new("Value scanner")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "First scan for a value, change it (in-game / by editing), then refine \
+                         until one address remains.",
+                    )
+                    .small()
+                    .color(theme::GREEN_DIM),
+                );
+                egui::ComboBox::from_label("Type")
+                    .selected_text(TYPES[self.scan.data_type].0)
+                    .show_ui(ui, |ui| {
+                        for (i, t) in TYPES.iter().enumerate() {
+                            ui.selectable_value(&mut self.scan.data_type, i, t.0);
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.label("Value:");
+                    ui.text_edit_singleline(&mut self.scan.value);
+                });
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.scan.aligned, "Aligned");
+                    ui.checkbox(&mut self.scan.big_endian, "Big-endian");
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("First scan").clicked() {
+                        self.do_first_scan();
+                    }
+                    if ui.button("Next: equal").clicked() {
+                        if let Ok(n) = self.scan_needle() {
+                            self.do_refine(scan::Refine::Eq(n));
+                        }
+                    }
+                    if ui.button("Changed").clicked() {
+                        self.do_refine(scan::Refine::Changed);
+                    }
+                    if ui.button("Unchanged").clicked() {
+                        self.do_refine(scan::Refine::Unchanged);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Increased").clicked() {
+                        self.do_refine(scan::Refine::Increased);
+                    }
+                    if ui.button("Decreased").clicked() {
+                        self.do_refine(scan::Refine::Decreased);
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.scan.matches.is_empty(),
+                            egui::Button::new("Write value → all"),
+                        )
+                        .clicked()
+                    {
+                        self.poke_value();
+                    }
+                    if ui.button("Clear").clicked() {
+                        self.scan.matches.clear();
+                        self.scan.status.clear();
+                    }
+                });
+                if !self.scan.status.is_empty() {
+                    ui.label(egui::RichText::new(&self.scan.status).color(theme::AMBER));
+                }
+                ui.separator();
+                let ty = TYPES[self.scan.data_type].1;
+                let endian = self.scan_endian();
+                egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                    egui::Grid::new("scan_grid").num_columns(2).striped(true).show(ui, |ui| {
+                        for m in self.scan.matches.iter().take(2000) {
+                            if ui
+                                .add(egui::Label::new(
+                                    egui::RichText::new(format!("{:#010X}", m.offset))
+                                        .color(theme::ADDR),
+                                ).sense(egui::Sense::click()))
+                                .clicked()
+                            {
+                                jump = Some(m.offset);
+                            }
+                            ui.label(
+                                egui::RichText::new(scan_value_str(&m.bytes, ty, endian))
+                                    .monospace(),
+                            );
+                            ui.end_row();
+                        }
+                    });
+                });
+                if self.scan.matches.len() > 2000 {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "(showing first 2000 of {})",
+                            self.scan.matches.len()
+                        ))
+                        .small()
+                        .color(theme::GREEN_DIM),
+                    );
+                }
+            });
+        if let Some(off) = jump {
+            self.set_cursor(off, false);
+        }
+        self.scan.open = open;
+    }
+
     fn about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.about_open;
         egui::Window::new("About ganghex")
@@ -1300,6 +1426,48 @@ fn digit_of(key: Key) -> Option<usize> {
         Key::Num9 => 9,
         _ => return None,
     })
+}
+
+/// Render a scanner match's bytes as its typed value for display.
+fn scan_value_str(bytes: &[u8], ty: search::DataType, endian: search::Endian) -> String {
+    use search::DataType::*;
+    let le = endian == search::Endian::Little;
+    let rd = |n: usize| -> Option<u64> {
+        if bytes.len() < n {
+            return None;
+        }
+        let mut v = 0u64;
+        if le {
+            for i in (0..n).rev() {
+                v = (v << 8) | bytes[i] as u64;
+            }
+        } else {
+            for &b in bytes.iter().take(n) {
+                v = (v << 8) | b as u64;
+            }
+        }
+        Some(v)
+    };
+    let sx = |v: u64, n: usize| -> i64 {
+        let shift = 64 - n * 8;
+        ((v << shift) as i64) >> shift
+    };
+    match ty {
+        I8 => rd(1).map(|v| sx(v, 1).to_string()),
+        I16 => rd(2).map(|v| sx(v, 2).to_string()),
+        I32 => rd(4).map(|v| sx(v, 4).to_string()),
+        I64 => rd(8).map(|v| sx(v, 8).to_string()),
+        F32 => rd(4).map(|v| f32::from_bits(v as u32).to_string()),
+        F64 => rd(8).map(|v| f64::from_bits(v).to_string()),
+        _ => Some(
+            bytes
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+    }
+    .unwrap_or_else(|| "—".to_string())
 }
 
 fn parse_addr(s: &str) -> Option<u64> {
