@@ -8,8 +8,8 @@ use egui::{Key, Sense};
 
 use crate::data::{Document, Region, RowItem, ViewMap};
 use crate::ops::{
-    checksum, export, fileops, inspect, patch, pattern, scan, search, stats, strings, transform,
-    Progress,
+    checksum, export, fileops, inspect, patch, pattern, scan, search, signatures, stats, strings,
+    transform, Progress,
 };
 
 use super::charset::Charset;
@@ -28,6 +28,7 @@ enum BgOutcome {
     Stats(Box<stats::Stats>),
     Strings(Vec<strings::Found>),
     Scan(Vec<scan::Match>),
+    Signatures(Vec<signatures::Hit>),
     Message(String),
 }
 
@@ -102,6 +103,13 @@ struct StatsState {
     open: bool,
     result: Option<stats::Stats>,
     whole_file: bool,
+    emap: Vec<f32>,
+}
+
+#[derive(Default)]
+struct SignaturesState {
+    open: bool,
+    results: Vec<signatures::Hit>,
 }
 
 #[derive(Default)]
@@ -230,6 +238,7 @@ pub struct App {
     transform: TransformState,
     strings: StringsState,
     scan: ScanState,
+    signatures: SignaturesState,
     inspector_open: bool,
     inspector_le: bool,
     regions_open: bool,
@@ -287,6 +296,7 @@ impl App {
                 ..Default::default()
             },
             scan: ScanState::default(),
+            signatures: SignaturesState::default(),
             inspector_open: true,
             inspector_le: true,
             regions_open: false,
@@ -542,6 +552,40 @@ impl App {
         }
     }
 
+    // ---- signature scan & entropy map ----
+
+    fn do_signatures(&mut self) {
+        let reader = self.doc.reader();
+        let len = self.doc.len();
+        self.start_bg("scanning signatures", len, move |p| {
+            BgOutcome::Signatures(signatures::scan(&reader, 0, len, 100_000, &p))
+        });
+    }
+
+    fn do_entropy_map(&mut self) {
+        let (off, len) = self.scope(self.stats.whole_file);
+        self.stats.emap = stats::entropy_map(&self.doc, off, len, 256, &Progress::default());
+    }
+
+    /// Write a hex-string digest at the cursor (checksum repair).
+    fn write_hex_at_cursor(&mut self, hex: &str) {
+        let bytes: Vec<u8> = hex
+            .as_bytes()
+            .chunks(2)
+            .filter_map(|c| {
+                std::str::from_utf8(c)
+                    .ok()
+                    .and_then(|s| u8::from_str_radix(s, 16).ok())
+            })
+            .collect();
+        if bytes.is_empty() {
+            return;
+        }
+        self.doc.overwrite(self.cursor, &bytes);
+        self.status = format!("wrote {}-byte digest at {:#X}", bytes.len(), self.cursor);
+        self.scroll_to_cursor = true;
+    }
+
     // ---- printing ----
 
     /// "Print" by rendering an HTML hex dump and handing it to the OS default
@@ -772,6 +816,10 @@ impl App {
                 self.scan.status = format!("{} match(es)", matches.len());
                 self.status = self.scan.status.clone();
                 self.scan.matches = matches;
+            }
+            BgOutcome::Signatures(hits) => {
+                self.status = format!("found {} signature(s)", hits.len());
+                self.signatures.results = hits;
             }
             BgOutcome::Message(m) => self.status = m,
         }

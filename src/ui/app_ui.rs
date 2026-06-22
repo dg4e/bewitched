@@ -18,6 +18,7 @@ impl eframe::App for App {
         self.transform_window(ctx);
         self.strings_window(ctx);
         self.scan_window(ctx);
+        self.signatures_window(ctx);
         self.regions_window(ctx);
         self.about_window(ctx);
         self.progress_window(ctx);
@@ -228,6 +229,10 @@ impl App {
                 }
                 if ui.button("Value scanner (memory/save editing)…").clicked() {
                     self.scan.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Find signatures (binwalk)…").clicked() {
+                    self.signatures.open = true;
                     ui.close_menu();
                 }
                 ui.separator();
@@ -771,6 +776,7 @@ impl App {
                     });
                 }
                 ui.separator();
+                let mut write: Option<String> = None;
                 egui::Grid::new("results").num_columns(2).striped(true).show(ui, |ui| {
                     for (a, v) in &self.checksum.results {
                         ui.label(egui::RichText::new(a.name()).color(theme::ADDR));
@@ -779,10 +785,20 @@ impl App {
                             if ui.small_button("copy").clicked() {
                                 ui.ctx().copy_text(v.clone());
                             }
+                            if ui
+                                .small_button("write@cursor")
+                                .on_hover_text("overwrite bytes at the cursor with this digest (checksum repair)")
+                                .clicked()
+                            {
+                                write = Some(v.clone());
+                            }
                         });
                         ui.end_row();
                     }
                 });
+                if let Some(hex) = write {
+                    self.write_hex_at_cursor(&hex);
+                }
             });
         self.checksum.open = open;
     }
@@ -795,12 +811,29 @@ impl App {
             .default_width(560.0)
             .show(ctx, |ui| {
                 ui.checkbox(&mut self.stats.whole_file, "Whole file (else selection)");
-                if ui.button("Analyze").clicked() {
+                ui.horizontal(|ui| {
+                    if ui.button("Analyze").clicked() {
+                        let (off, len) = self.scope(self.stats.whole_file);
+                        let reader = self.doc.reader();
+                        self.start_bg("analyzing", len, move |p| {
+                            BgOutcome::Stats(Box::new(stats::analyze(&reader, off, len, &p)))
+                        });
+                    }
+                    if ui.button("Entropy map").clicked() {
+                        self.do_entropy_map();
+                    }
+                });
+                if !self.stats.emap.is_empty() {
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new("entropy map (file start → end; click to jump)")
+                            .color(theme::GREEN_DIM),
+                    );
                     let (off, len) = self.scope(self.stats.whole_file);
-                    let reader = self.doc.reader();
-                    self.start_bg("analyzing", len, move |p| {
-                        BgOutcome::Stats(Box::new(stats::analyze(&reader, off, len, &p)))
-                    });
+                    if let Some(frac) = draw_entropy_map(ui, &self.stats.emap) {
+                        let target = off + (frac as f64 * len as f64) as u64;
+                        self.set_cursor(target.min(self.doc.len()), false);
+                    }
                 }
                 ui.separator();
                 if let Some(s) = &self.stats.result {
@@ -1354,6 +1387,56 @@ impl App {
         self.scan.open = open;
     }
 
+    fn signatures_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.signatures.open;
+        let mut jump: Option<u64> = None;
+        egui::Window::new("Signatures (binwalk)")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Scan file").clicked() {
+                        self.do_signatures();
+                    }
+                    ui.label(
+                        egui::RichText::new(format!("{} hit(s)", self.signatures.results.len()))
+                            .color(theme::GREEN_DIM),
+                    );
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                    egui::Grid::new("sig_grid").num_columns(3).striped(true).show(ui, |ui| {
+                        for h in &self.signatures.results {
+                            if ui
+                                .add(egui::Label::new(
+                                    egui::RichText::new(format!("{:#010X}", h.offset))
+                                        .color(theme::ADDR),
+                                ).sense(egui::Sense::click()))
+                                .clicked()
+                            {
+                                jump = Some(h.offset);
+                            }
+                            ui.label(
+                                egui::RichText::new(h.category.label()).color(theme::GREEN_DIM),
+                            );
+                            ui.label(egui::RichText::new(h.name).color(theme::GREEN));
+                            ui.end_row();
+                        }
+                    });
+                });
+                ui.label(
+                    egui::RichText::new("detects embedded formats, archives, executables and crypto constants")
+                        .small()
+                        .color(theme::GREEN_DIM),
+                );
+            });
+        if let Some(off) = jump {
+            self.set_cursor(off, false);
+        }
+        self.signatures.open = open;
+    }
+
     fn about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.about_open;
         egui::Window::new("About ganghex")
@@ -1507,6 +1590,50 @@ fn draw_distribution(ui: &mut egui::Ui, counts: &[u64; 256]) {
         };
         painter.rect_filled(bar, 0.0, color);
     }
+}
+
+/// Draw the entropy strip (0..8 bits mapped green→amber→red). Returns the
+/// clicked fraction along the strip, if any.
+fn draw_entropy_map(ui: &mut egui::Ui, emap: &[f32]) -> Option<f32> {
+    let h = 36.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().min(528.0), h),
+        Sense::click(),
+    );
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, theme::PANEL);
+    let n = emap.len().max(1);
+    let bw = rect.width() / n as f32;
+    for (i, &e) in emap.iter().enumerate() {
+        let t = (e / 8.0).clamp(0.0, 1.0);
+        // green (low) -> amber -> red (high)
+        let color = if t < 0.5 {
+            let k = t * 2.0;
+            egui::Color32::from_rgb(
+                (0x33 as f32 + k * (0xff - 0x33) as f32) as u8,
+                0xb8,
+                (0x66 as f32 * (1.0 - k)) as u8,
+            )
+        } else {
+            let k = (t - 0.5) * 2.0;
+            egui::Color32::from_rgb(0xff, (0xb8 as f32 * (1.0 - k)) as u8, 0x4d)
+        };
+        let x = rect.left() + i as f32 * bw;
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(x, rect.top()),
+                egui::pos2(x + bw.max(1.0), rect.bottom()),
+            ),
+            0.0,
+            color,
+        );
+    }
+    if resp.clicked() {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            return Some(((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
+        }
+    }
+    None
 }
 
 /// Platform-specific raw device targets offered in the File menu.

@@ -83,6 +83,59 @@ pub fn analyze(doc: &dyn ByteReader, offset: u64, len: u64, progress: &Progress)
     }
 }
 
+/// Compute a per-bucket entropy strip across `[offset, offset+len)`, for an
+/// overview/"binwalk" style visualization. Each of `buckets` segments is sampled
+/// (up to `SAMPLE` bytes from its start) so the strip is cheap even on huge
+/// inputs. Values are in bits/byte (0..8).
+pub fn entropy_map(
+    doc: &dyn ByteReader,
+    offset: u64,
+    len: u64,
+    buckets: usize,
+    progress: &Progress,
+) -> Vec<f32> {
+    const SAMPLE: u64 = 1 << 16;
+    let buckets = buckets.max(1);
+    let total = (offset + len).min(doc.len()).saturating_sub(offset);
+    progress.set_total(buckets as u64);
+    let mut out = Vec::with_capacity(buckets);
+    if total == 0 {
+        return vec![0.0; buckets];
+    }
+    let step = total / buckets as u64;
+    let mut buf = vec![0u8; SAMPLE as usize];
+    for b in 0..buckets {
+        if progress.is_cancelled() {
+            break;
+        }
+        let bstart = offset + b as u64 * step;
+        let bend = if b + 1 == buckets {
+            offset + total
+        } else {
+            bstart + step
+        };
+        let want = (bend - bstart).min(SAMPLE) as usize;
+        let n = doc.read_at(bstart, &mut buf[..want]);
+        let mut counts = [0u64; 256];
+        for &x in &buf[..n] {
+            counts[x as usize] += 1;
+        }
+        let mut e = 0.0f64;
+        if n > 0 {
+            for &c in &counts {
+                if c > 0 {
+                    let p = c as f64 / n as f64;
+                    e -= p * p.log2();
+                }
+            }
+        }
+        out.push(e as f32);
+        progress.set_done(b as u64 + 1);
+    }
+    progress.finish();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,6 +181,26 @@ mod tests {
             data.push((x >> 24) as u8);
         }
         assert_eq!(classify(&data), "compressed / encrypted (high entropy)");
+    }
+
+    #[test]
+    fn entropy_map_low_then_high() {
+        // first half all zeros (entropy 0), second half full byte range (entropy 8)
+        let mut data = vec![0u8; 4096];
+        let high: Vec<u8> = (0..4096u32).map(|x| x as u8).collect();
+        data.extend_from_slice(&high);
+        let d = Document::from_source(Arc::new(MemSource::new(data, "t")));
+        let map = entropy_map(&d, 0, d.len(), 2, &Progress::default());
+        assert_eq!(map.len(), 2);
+        assert!(map[0] < 0.5, "low half entropy {}", map[0]);
+        assert!(map[1] > 7.5, "high half entropy {}", map[1]);
+    }
+
+    #[test]
+    fn entropy_map_empty() {
+        let d = Document::empty();
+        let map = entropy_map(&d, 0, 0, 4, &Progress::default());
+        assert_eq!(map, vec![0.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]
