@@ -47,19 +47,11 @@ impl Layout {
     }
 
     fn groups(&self) -> usize {
-        (self.bytes_per_row + self.group - 1) / self.group
+        self.bytes_per_row.div_ceil(self.group)
     }
 
     fn group_stride(&self) -> usize {
         self.group * 2 + 1 // 2 hex chars per byte + 1 separator space per group
-    }
-
-    /// Character column (from start of the hex area) of byte `i`'s first nibble.
-    #[allow(dead_code)]
-    pub fn hex_col(&self, i: usize) -> usize {
-        let gi = i / self.group;
-        let within = i % self.group;
-        gi * self.group_stride() + within * 2
     }
 
     fn hex_width(&self) -> usize {
@@ -79,16 +71,6 @@ impl Layout {
         match self.mode {
             ViewMode::TextOnly => self.addr_end(),
             _ => self.hex_start() + self.hex_width() + 2,
-        }
-    }
-
-    /// Total row width in characters (for sizing the scroll area).
-    #[allow(dead_code)]
-    pub fn total_chars(&self) -> usize {
-        match self.mode {
-            ViewMode::HexOnly => self.hex_start() + self.hex_width(),
-            ViewMode::TextOnly => self.ascii_start() + self.bytes_per_row,
-            ViewMode::Both => self.ascii_start() + self.bytes_per_row,
         }
     }
 
@@ -259,5 +241,77 @@ fn nib_style(
             }
         }
         None => (base, selbg),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn addr_digits_grow_with_size() {
+        assert_eq!(Layout::new(16, 1, 1, ViewMode::Both).addr_digits, 8);
+        assert_eq!(Layout::new(16, 1, 0x1_0000_0000, ViewMode::Both).addr_digits, 8);
+        // needs 9 hex digits for offsets up to ~16 GiB
+        assert!(Layout::new(16, 1, 0x10_0000_0000, ViewMode::Both).addr_digits >= 9);
+    }
+
+    #[test]
+    fn col_to_byte_group1() {
+        let l = Layout::new(16, 1, 256, ViewMode::Both);
+        // hex area begins at addr_digits(8) + 2 = 10
+        assert_eq!(l.col_to_byte(10), Some((0, Pane::Hex, 0)));
+        assert_eq!(l.col_to_byte(11), Some((0, Pane::Hex, 1)));
+        assert_eq!(l.col_to_byte(13), Some((1, Pane::Hex, 0)));
+        // ascii pane
+        let (i, pane, _) = l.col_to_byte(59).unwrap();
+        assert_eq!((i, pane), (0, Pane::Text));
+        assert_eq!(l.col_to_byte(60).unwrap().0, 1);
+    }
+
+    #[test]
+    fn col_to_byte_group2_packs_bytes() {
+        let l = Layout::new(16, 2, 256, ViewMode::Both);
+        // group stride = 2*2+1 = 5 chars per group of 2 bytes
+        assert_eq!(l.col_to_byte(10), Some((0, Pane::Hex, 0)));
+        assert_eq!(l.col_to_byte(12), Some((1, Pane::Hex, 0))); // second byte of group
+        assert_eq!(l.col_to_byte(15), Some((2, Pane::Hex, 0))); // next group
+    }
+
+    #[test]
+    fn text_only_has_no_hex_hits() {
+        let l = Layout::new(16, 1, 256, ViewMode::TextOnly);
+        // ascii starts right after the address gutter
+        assert_eq!(l.col_to_byte(10), Some((0, Pane::Text, 0)));
+        assert_eq!(l.col_to_byte(11).unwrap().1, Pane::Text);
+    }
+
+    #[test]
+    fn hex_only_has_no_text_hits() {
+        let l = Layout::new(16, 1, 256, ViewMode::HexOnly);
+        assert_eq!(l.col_to_byte(10), Some((0, Pane::Hex, 0)));
+        // far right, beyond hex area: no hit
+        assert_eq!(l.col_to_byte(200), None);
+    }
+
+    #[test]
+    fn build_row_produces_text() {
+        let l = Layout::new(16, 1, 16, ViewMode::Both);
+        let bytes: Vec<Option<u8>> = (0..16).map(|i| Some(i as u8)).collect();
+        let modified = vec![false; 16];
+        let selected = vec![false; 16];
+        let ctx = RowCtx {
+            bytes: &bytes,
+            modified: &modified,
+            selected: &selected,
+            base_addr: 0,
+            charset: Charset::Ansi,
+            cursor: Some((0, 0, Pane::Hex)),
+            editing_pane: Pane::Hex,
+            font: theme::mono(13.0),
+        };
+        let job = build_row(&l, &ctx);
+        assert!(job.text.starts_with("00000000"));
+        assert!(job.text.contains("0F")); // last byte rendered
     }
 }

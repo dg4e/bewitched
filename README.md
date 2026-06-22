@@ -46,25 +46,45 @@ blocks.
   MD5, SHA-1, SHA-256, SHA-512 — computed in one streaming pass.
 - **Statistics**: byte/character distribution chart, Shannon entropy, and a
   data-type classification hint.
-- **Export**: C / Pascal / Java / C# / VB.NET / Python / Rust source,
-  plain hex dump / HTML / Markdown / RTF / TeX, and Intel HEX / Motorola
-  S-record.
+- **Export** (25 formats): C / C++ / Pascal / Java / C# / VB.NET / Python /
+  Rust / Go / Swift / Kotlin / JavaScript / TypeScript / NASM assembly / Ruby /
+  PHP / Perl source; plain hex dump / HTML / Markdown / RTF / TeX / Base64; and
+  Intel HEX / Motorola S-record.
 - **Byte patterns**: insert / overwrite / fill-selection with a repeating hex
   pattern.
 - **File tools**: secure shredder (multi-pass overwrite + delete), split,
   concatenate, and simple file compare.
+- **Data-folds / regions**: fold any selection into a collapsible region;
+  mark regions inaccessible to hide them (e.g. unreadable RAM sections, which
+  are hidden by default). Click a fold marker to expand; manage all regions in
+  a dialog.
+- **Printing**: renders a hex dump and opens it in the system default viewer
+  (browser), which can print or save as PDF.
 - **Views**: ANSI / DOS (CP437) / EBCDIC / Macintosh character sets; byte
   grouping (1/2/4/8/16); hex-only / text-only / both; selectable column count.
 
 ## Build & run
 
 ```sh
-cargo run --release          # launch the GUI
-cargo test                   # run the engine/ops test suite
-cargo run --release -- ...   # (file argument support is a natural next step)
+cargo run --release                 # launch the GUI
+cargo run --release -- file.bin     # open a file (or device path) on startup
+cargo run --release -- --version    # print version and exit
+cargo test                          # run the test suite (77 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
+
+### Editions / packaging
+
+- **Portable edition** — `cargo build --release` produces a single,
+  self-contained, stripped binary at `target/release/ganghex`. Copy it
+  anywhere and run; no installation needed.
+- **Installable edition** — native installers are produced from the metadata in
+  `Cargo.toml`:
+  ```sh
+  cargo install cargo-bundle && cargo bundle --release   # .app/.dmg, .deb, .msi
+  cargo install cargo-deb    && cargo deb                 # Debian .deb (Linux)
+  ```
 
 ## Raw disk / RAM access
 
@@ -81,6 +101,7 @@ src/
   data/         engine
     source.rs   DataSource trait + mmap/file/memory sources
     document.rs piece-table, undo/redo, ByteReader trait + Send snapshot
+    regions.rs  foldable regions ("data-folds") + offset/row view map
   ops/          feature operations (all unit-tested)
     search.rs   streaming multi-type find / replace
     checksum.rs streaming digests
@@ -97,6 +118,10 @@ src/
 
 ## Status
 
-Engine and feature operations are implemented and covered by tests. Several
-listed capabilities (printing, raw RAM folding regions, portable/installer
-packaging) are scaffolded by the architecture but not yet wired into the UI.
+Engine, feature operations and GUI are implemented and covered by **77 tests**
+(`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
+CLI file arguments and portable/installable packaging are wired up.
+
+The secure shredder is best-effort: on SSDs and copy-on-write filesystems an
+in-place overwrite is not guaranteed to hit the original blocks — the UI says so.
+Raw disk/RAM device entries require elevated privileges to open.

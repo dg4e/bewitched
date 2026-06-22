@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use egui::{Key, Sense};
 
-use crate::data::Document;
+use crate::data::{Document, Region, RowItem, ViewMap};
 use crate::ops::{checksum, export, fileops, pattern, search, stats, Progress};
 
 use super::charset::Charset;
@@ -99,22 +99,12 @@ struct StatsState {
     whole_file: bool,
 }
 
+#[derive(Default)]
 struct ExportState {
     open: bool,
     fmt: usize,
     whole_file: bool,
     preview: String,
-}
-
-impl Default for ExportState {
-    fn default() -> Self {
-        Self {
-            open: false,
-            fmt: 0,
-            whole_file: false,
-            preview: String::new(),
-        }
-    }
 }
 
 struct PatternState {
@@ -168,6 +158,7 @@ pub struct App {
     charset: Charset,
     bookmarks: [Option<u64>; 10],
     clipboard: Vec<u8>,
+    regions: Vec<Region>,
     status: String,
     scroll_to_cursor: bool,
     page_rows: usize,
@@ -181,14 +172,28 @@ pub struct App {
     export: ExportState,
     pattern: PatternState,
     tools: ToolsState,
+    regions_open: bool,
     about_open: bool,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, startup: Option<PathBuf>) -> Self {
         theme::install(&cc.egui_ctx);
+        let (doc, status) = match startup {
+            Some(p) => match Document::open_file(&p) {
+                Ok(d) => {
+                    let s = format!("opened {} ({})", p.display(), human(d.len()));
+                    (d, s)
+                }
+                Err(e) => (Document::empty(), format!("open failed: {e}")),
+            },
+            None => (
+                Document::empty(),
+                "ready — open a file, disk, or start typing".to_string(),
+            ),
+        };
         Self {
-            doc: Document::empty(),
+            doc,
             cursor: 0,
             nibble: 0,
             sel_anchor: None,
@@ -200,7 +205,8 @@ impl App {
             charset: Charset::Ansi,
             bookmarks: [None; 10],
             clipboard: Vec::new(),
-            status: "ready — open a file, disk, or start typing".into(),
+            regions: Vec::new(),
+            status,
             scroll_to_cursor: false,
             page_rows: 16,
             bg: None,
@@ -214,6 +220,7 @@ impl App {
             export: ExportState::default(),
             pattern: PatternState::default(),
             tools: ToolsState::default(),
+            regions_open: false,
             about_open: false,
         }
     }
@@ -267,7 +274,59 @@ impl App {
         self.cursor = 0;
         self.nibble = 0;
         self.sel_anchor = None;
+        self.regions.clear();
         self.scroll_to_cursor = true;
+    }
+
+    // ---- regions / data-folds ----
+
+    fn fold_selection(&mut self, accessible: bool) {
+        if let Some((s, e)) = self.selection_range() {
+            let label = format!("region @ {:#X}", s);
+            let mut r = if accessible {
+                Region::new(s, e - s, label)
+            } else {
+                Region::inaccessible(s, e - s, label)
+            };
+            r.folded = true;
+            self.regions.push(r);
+            self.sel_anchor = None;
+            self.status = format!("folded {} bytes", e - s);
+        } else {
+            self.status = "select a range to fold first".into();
+        }
+    }
+
+    fn unfold_all(&mut self) {
+        for r in &mut self.regions {
+            r.folded = false;
+        }
+        self.status = "unfolded all regions".into();
+    }
+
+    fn view_map(&self) -> ViewMap {
+        ViewMap::build(self.doc.len(), &self.regions, self.bytes_per_row)
+    }
+
+    // ---- printing ----
+
+    /// "Print" by rendering an HTML hex dump and handing it to the OS default
+    /// handler (typically the browser, which can print). Cross-platform.
+    fn print(&mut self) {
+        let (off, len) = self.scope(true);
+        let body = export::export(&self.doc, off, len, export::Format::Html);
+        let mut path = std::env::temp_dir();
+        path.push(format!("ganghex_print_{}.html", self.doc.label().replace('/', "_")));
+        match std::fs::write(&path, body.as_bytes()) {
+            Ok(()) => {
+                if let Err(e) = open_in_default_app(&path) {
+                    self.status = format!("print: wrote {} ({e})", path.display());
+                } else {
+                    self.status = format!("opened print view: {}", path.display());
+                }
+            }
+            Err(e) => self.status = format!("print failed: {e}"),
+        }
     }
 
     // ---- selection helpers ----
@@ -503,6 +562,23 @@ impl App {
             (0, self.doc.len())
         }
     }
+}
+
+/// Open a path with the operating system's default handler.
+fn open_in_default_app(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = std::process::Command::new("xdg-open");
+
+    cmd.arg(path);
+    cmd.spawn().map(|_| ())
 }
 
 fn human(n: u64) -> String {

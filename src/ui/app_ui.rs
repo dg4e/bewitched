@@ -15,6 +15,7 @@ impl eframe::App for App {
         self.export_window(ctx);
         self.pattern_window(ctx);
         self.tools_window(ctx);
+        self.regions_window(ctx);
         self.about_window(ctx);
         self.progress_window(ctx);
 
@@ -64,6 +65,11 @@ impl App {
                 }
                 if ui.button("Save as…").clicked() {
                     self.save_as();
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Print…   (opens hex dump in default viewer)").clicked() {
+                    self.print();
                     ui.close_menu();
                 }
                 ui.separator();
@@ -147,6 +153,24 @@ impl App {
                 if ui.radio(self.view_mode == ViewMode::TextOnly, "Text only").clicked() {
                     self.view_mode = ViewMode::TextOnly;
                 }
+                ui.separator();
+                ui.label("Data-folds / regions");
+                if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("Fold selection")).clicked() {
+                    self.fold_selection(true);
+                    ui.close_menu();
+                }
+                if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("Fold selection (inaccessible)")).clicked() {
+                    self.fold_selection(false);
+                    ui.close_menu();
+                }
+                if ui.add_enabled(!self.regions.is_empty(), egui::Button::new("Unfold all")).clicked() {
+                    self.unfold_all();
+                    ui.close_menu();
+                }
+                if ui.button("Regions…").clicked() {
+                    self.regions_open = true;
+                    ui.close_menu();
+                }
             });
 
             ui.menu_button("Search", |ui| {
@@ -222,7 +246,7 @@ impl App {
                 );
             }
             ui.separator();
-            ui.label(format!("{}", human(self.doc.len())));
+            ui.label(human(self.doc.len()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mode = match self.mode {
                     EditMode::Overwrite => "OVR",
@@ -230,7 +254,7 @@ impl App {
                 };
                 ui.label(egui::RichText::new(mode).color(theme::GREEN).strong());
                 ui.separator();
-                ui.label(egui::RichText::new(&self.status).color(theme::GREEN_DIM));
+                ui.label(egui::RichText::new(&self.status).color(theme::status_color(&self.status)));
             });
         });
     }
@@ -252,77 +276,117 @@ impl App {
 
         let len = self.doc.len();
         let bpr = self.bytes_per_row as u64;
-        let total_rows = (len / bpr + if len % bpr != 0 || len == 0 { 1 } else { 0 }) as usize;
         let layout = Layout::new(self.bytes_per_row, self.group, len, self.view_mode);
+        let vm = self.view_map();
+        let total_rows = vm.total_rows().max(1);
 
         self.page_rows = ((ui.available_height() / row_h) as usize).max(1);
         let scroll_to = self.scroll_to_cursor;
         self.scroll_to_cursor = false;
-        let cursor_row = (self.cursor / bpr) as usize;
+        let cursor_row = vm.offset_to_row(self.cursor).unwrap_or(0);
 
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show_rows(ui, row_h, total_rows, |ui, range| {
                 for r in range {
-                    let base = r as u64 * bpr;
-                    let raw = self.doc.read_range(base, self.bytes_per_row);
-                    let bytes: Vec<Option<u8>> =
-                        (0..self.bytes_per_row).map(|i| raw.get(i).copied()).collect();
-                    let modified: Vec<bool> = (0..self.bytes_per_row)
-                        .map(|i| {
-                            let off = base + i as u64;
-                            off < len && self.doc.is_byte_modified(off)
-                        })
-                        .collect();
-                    let sel = self.selection_range();
-                    let selected: Vec<bool> = (0..self.bytes_per_row)
-                        .map(|i| {
-                            let off = base + i as u64;
-                            sel.map(|(s, e)| off >= s && off < e).unwrap_or(false)
-                        })
-                        .collect();
-                    let cursor = if self.cursor >= base && self.cursor < base + bpr {
-                        Some(((self.cursor - base) as usize, self.nibble, self.pane))
-                    } else {
-                        None
-                    };
-
-                    let ctx = hexview::RowCtx {
-                        bytes: &bytes,
-                        modified: &modified,
-                        selected: &selected,
-                        base_addr: base,
-                        charset: self.charset,
-                        cursor,
-                        editing_pane: self.pane,
-                        font: font.clone(),
-                    };
-                    let job = hexview::build_row(&layout, &ctx);
-                    let resp = ui.add(
-                        egui::Label::new(job)
-                            .sense(Sense::click_and_drag())
-                            .selectable(false),
-                    );
-
-                    if scroll_to && r == cursor_row {
-                        resp.scroll_to_me(Some(egui::Align::Center));
-                    }
-
-                    if (resp.clicked() || resp.dragged()) && self.bg.is_none() {
-                        if let Some(pos) = resp.interact_pointer_pos() {
-                            let relx = pos.x - resp.rect.left();
-                            let col = (relx / char_w).floor();
-                            if col >= 0.0 {
-                                if let Some((i, pane, nib)) = layout.col_to_byte(col as usize) {
-                                    let off = (base + i as u64).min(len);
-                                    let extend = resp.dragged();
-                                    self.click_to(off, pane, nib, extend);
+                    match vm.row(r).unwrap_or(RowItem::Data { base: r as u64 * bpr }) {
+                        RowItem::Fold { region } => {
+                            let reg = &self.regions[region];
+                            let mark = if reg.accessible { "▸" } else { "⊘" };
+                            let txt = format!(
+                                "  {} {}   {:#X}..{:#X}   ({} bytes folded — click to expand)",
+                                mark,
+                                reg.label,
+                                reg.start,
+                                reg.end(),
+                                reg.len
+                            );
+                            let resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(txt)
+                                        .color(theme::AMBER)
+                                        .background_color(theme::BG_ALT),
+                                )
+                                .sense(Sense::click())
+                                .selectable(false),
+                            );
+                            if resp.clicked() {
+                                self.regions[region].folded = false;
+                                self.scroll_to_cursor = true;
+                            }
+                        }
+                        RowItem::Data { base } => {
+                            let resp = self.render_data_row(ui, base, &font, &layout, len);
+                            if scroll_to && r == cursor_row {
+                                resp.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if (resp.clicked() || resp.dragged()) && self.bg.is_none() {
+                                if let Some(pos) = resp.interact_pointer_pos() {
+                                    let relx = pos.x - resp.rect.left();
+                                    let col = (relx / char_w).floor();
+                                    if col >= 0.0 {
+                                        if let Some((i, pane, nib)) =
+                                            layout.col_to_byte(col as usize)
+                                        {
+                                            let off = (base + i as u64).min(len);
+                                            let extend = resp.dragged();
+                                            self.click_to(off, pane, nib, extend);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             });
+    }
+
+    /// Render one data row and return its response (for click/scroll handling).
+    fn render_data_row(
+        &self,
+        ui: &mut egui::Ui,
+        base: u64,
+        font: &egui::FontId,
+        layout: &Layout,
+        len: u64,
+    ) -> egui::Response {
+        let raw = self.doc.read_range(base, self.bytes_per_row);
+        let bytes: Vec<Option<u8>> =
+            (0..self.bytes_per_row).map(|i| raw.get(i).copied()).collect();
+        let modified: Vec<bool> = (0..self.bytes_per_row)
+            .map(|i| {
+                let off = base + i as u64;
+                off < len && self.doc.is_byte_modified(off)
+            })
+            .collect();
+        let sel = self.selection_range();
+        let selected: Vec<bool> = (0..self.bytes_per_row)
+            .map(|i| {
+                let off = base + i as u64;
+                sel.map(|(s, e)| off >= s && off < e).unwrap_or(false)
+            })
+            .collect();
+        let cursor = if self.cursor >= base && self.cursor < base + self.bytes_per_row as u64 {
+            Some(((self.cursor - base) as usize, self.nibble, self.pane))
+        } else {
+            None
+        };
+        let ctx = hexview::RowCtx {
+            bytes: &bytes,
+            modified: &modified,
+            selected: &selected,
+            base_addr: base,
+            charset: self.charset,
+            cursor,
+            editing_pane: self.pane,
+            font: font.clone(),
+        };
+        let job = hexview::build_row(layout, &ctx);
+        ui.add(
+            egui::Label::new(job)
+                .sense(Sense::click_and_drag())
+                .selectable(false),
+        )
     }
 
     fn click_to(&mut self, off: u64, pane: Pane, nib: u8, extend: bool) {
@@ -438,7 +502,7 @@ impl App {
             Key::PageDown => self.move_by(bpr * self.page_rows as i64, shift),
             Key::Home => {
                 let row_start = self.cursor - (self.cursor % bpr as u64);
-                self.set_cursor(if shift { row_start } else { row_start }, shift);
+                self.set_cursor(row_start, shift);
             }
             Key::End => {
                 let row_end = (self.cursor - self.cursor % bpr as u64) + bpr as u64 - 1;
@@ -934,6 +998,74 @@ impl App {
         self.tools.open = open;
     }
 
+    fn regions_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.regions_open;
+        egui::Window::new("Regions / data-folds")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Regions mark sections of the document. Folded regions collapse to a \
+                         single marker row; inaccessible regions (e.g. unreadable RAM) are \
+                         hidden by default.",
+                    )
+                    .small()
+                    .color(theme::GREEN_DIM),
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.selection_range().is_some(),
+                            egui::Button::new("Fold selection"),
+                        )
+                        .clicked()
+                    {
+                        self.fold_selection(true);
+                    }
+                    if ui.button("Unfold all").clicked() {
+                        self.unfold_all();
+                    }
+                    if ui.button("Clear all").clicked() {
+                        self.regions.clear();
+                    }
+                });
+                ui.separator();
+                let mut remove: Option<usize> = None;
+                egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                    egui::Grid::new("regions_grid")
+                        .num_columns(5)
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("label").color(theme::ADDR));
+                            ui.label(egui::RichText::new("range").color(theme::ADDR));
+                            ui.label(egui::RichText::new("folded").color(theme::ADDR));
+                            ui.label(egui::RichText::new("accessible").color(theme::ADDR));
+                            ui.label("");
+                            ui.end_row();
+                            for (i, r) in self.regions.iter_mut().enumerate() {
+                                ui.text_edit_singleline(&mut r.label);
+                                ui.label(format!("{:#X}..{:#X} ({})", r.start, r.end(), r.len));
+                                ui.checkbox(&mut r.folded, "");
+                                ui.checkbox(&mut r.accessible, "");
+                                if ui.small_button("✕").clicked() {
+                                    remove = Some(i);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
+                if let Some(i) = remove {
+                    self.regions.remove(i);
+                }
+                if self.regions.is_empty() {
+                    ui.label(egui::RichText::new("no regions — select bytes then Fold selection").color(theme::GREEN_DIM));
+                }
+            });
+        self.regions_open = open;
+    }
+
     fn about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.about_open;
         egui::Window::new("About ganghex")
@@ -1074,5 +1206,36 @@ fn raw_targets() -> Vec<(String, String)> {
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod ui_tests {
+    use super::*;
+
+    #[test]
+    fn parse_addr_forms() {
+        assert_eq!(parse_addr("0x10"), Some(16));
+        assert_eq!(parse_addr("0X1F"), Some(31));
+        assert_eq!(parse_addr("255"), Some(255));
+        assert_eq!(parse_addr("deadbeef"), Some(0xdeadbeef)); // bare hex with letters
+        assert_eq!(parse_addr("  0x100  "), Some(256));
+        assert_eq!(parse_addr("zzz"), None);
+    }
+
+    #[test]
+    fn human_sizes() {
+        assert_eq!(human(0), "0 B");
+        assert_eq!(human(512), "512 B");
+        assert!(human(1024).starts_with("1.00 KiB"));
+        assert!(human(1024 * 1024).starts_with("1.00 MiB"));
+        assert!(human(1u64 << 60).contains("EiB"));
+    }
+
+    #[test]
+    fn digit_of_keys() {
+        assert_eq!(digit_of(egui::Key::Num0), Some(0));
+        assert_eq!(digit_of(egui::Key::Num9), Some(9));
+        assert_eq!(digit_of(egui::Key::A), None);
     }
 }
