@@ -7,7 +7,9 @@ use std::time::Instant;
 use egui::{Key, Sense};
 
 use crate::data::{Document, Region, RowItem, ViewMap};
-use crate::ops::{checksum, export, fileops, pattern, search, stats, Progress};
+use crate::ops::{
+    checksum, export, fileops, inspect, pattern, search, stats, strings, transform, Progress,
+};
 
 use super::charset::Charset;
 use super::hexview::{self, Layout, Pane, ViewMode};
@@ -23,6 +25,7 @@ enum EditMode {
 enum BgOutcome {
     Checksum(Vec<(checksum::Algo, String)>),
     Stats(Box<stats::Stats>),
+    Strings(Vec<strings::Found>),
     Message(String),
 }
 
@@ -125,6 +128,32 @@ impl Default for PatternState {
     }
 }
 
+struct TransformState {
+    open: bool,
+    op: usize, // index into TRANSFORM_OPS
+    key: String,
+    swap_group: usize,
+}
+
+impl Default for TransformState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            op: 0,
+            key: "FF".into(),
+            swap_group: 2,
+        }
+    }
+}
+
+#[derive(Default)]
+struct StringsState {
+    open: bool,
+    min_len: String,
+    whole_file: bool,
+    results: Vec<strings::Found>,
+}
+
 struct ToolsState {
     open: bool,
     shred_passes: String,
@@ -172,6 +201,10 @@ pub struct App {
     export: ExportState,
     pattern: PatternState,
     tools: ToolsState,
+    transform: TransformState,
+    strings: StringsState,
+    inspector_open: bool,
+    inspector_le: bool,
     regions_open: bool,
     about_open: bool,
 }
@@ -220,6 +253,14 @@ impl App {
             export: ExportState::default(),
             pattern: PatternState::default(),
             tools: ToolsState::default(),
+            transform: TransformState::default(),
+            strings: StringsState {
+                min_len: "4".into(),
+                whole_file: true,
+                ..Default::default()
+            },
+            inspector_open: true,
+            inspector_le: true,
             regions_open: false,
             about_open: false,
         }
@@ -306,6 +347,48 @@ impl App {
 
     fn view_map(&self) -> ViewMap {
         ViewMap::build(self.doc.len(), &self.regions, self.bytes_per_row)
+    }
+
+    // ---- transforms ----
+
+    fn apply_transform(&mut self) {
+        let Some((s, e)) = self.selection_range() else {
+            self.status = "select a range to transform".into();
+            return;
+        };
+        let key = u8::from_str_radix(self.transform.key.trim(), 16).unwrap_or(0);
+        let n: u32 = self.transform.key.trim().parse().unwrap_or(1);
+        let op = match TRANSFORM_OPS[self.transform.op].1 {
+            TKind::Not => transform::Op::Not,
+            TKind::Xor => transform::Op::Xor(key),
+            TKind::And => transform::Op::And(key),
+            TKind::Or => transform::Op::Or(key),
+            TKind::Add => transform::Op::Add(key),
+            TKind::Sub => transform::Op::Sub(key),
+            TKind::Rol => transform::Op::Rol(n),
+            TKind::Ror => transform::Op::Ror(n),
+            TKind::Shl => transform::Op::Shl(n),
+            TKind::Shr => transform::Op::Shr(n),
+            TKind::Reverse => transform::Op::Reverse,
+            TKind::Swap => transform::Op::SwapBytes(self.transform.swap_group),
+            TKind::FlipCase => transform::Op::FlipCase,
+        };
+        let mut data = self.doc.read_range(s, (e - s) as usize);
+        transform::apply(&mut data, op);
+        self.doc.overwrite(s, &data);
+        self.status = format!("transformed {} bytes", e - s);
+        self.scroll_to_cursor = true;
+    }
+
+    // ---- string extraction ----
+
+    fn do_strings(&mut self) {
+        let (off, len) = self.scope(self.strings.whole_file);
+        let min_len = self.strings.min_len.trim().parse().unwrap_or(4usize).max(1);
+        let reader = self.doc.reader();
+        self.start_bg("scanning for strings", len, move |p| {
+            BgOutcome::Strings(strings::extract(&reader, off, len, min_len, 100_000, &p))
+        });
     }
 
     // ---- printing ----
@@ -530,6 +613,10 @@ impl App {
                 );
                 self.stats.result = Some(*s);
             }
+            BgOutcome::Strings(found) => {
+                self.status = format!("found {} string(s)", found.len());
+                self.strings.results = found;
+            }
             BgOutcome::Message(m) => self.status = m,
         }
     }
@@ -563,6 +650,40 @@ impl App {
         }
     }
 }
+
+#[derive(Clone, Copy)]
+enum TKind {
+    Not,
+    Xor,
+    And,
+    Or,
+    Add,
+    Sub,
+    Rol,
+    Ror,
+    Shl,
+    Shr,
+    Reverse,
+    Swap,
+    FlipCase,
+}
+
+/// Transform menu entries: (label, kind, needs_hex_key, needs_count).
+const TRANSFORM_OPS: &[(&str, TKind, bool, bool)] = &[
+    ("XOR with key", TKind::Xor, true, false),
+    ("AND with key", TKind::And, true, false),
+    ("OR with key", TKind::Or, true, false),
+    ("ADD key", TKind::Add, true, false),
+    ("SUB key", TKind::Sub, true, false),
+    ("NOT (invert)", TKind::Not, false, false),
+    ("Rotate left (bits)", TKind::Rol, false, true),
+    ("Rotate right (bits)", TKind::Ror, false, true),
+    ("Shift left (bits)", TKind::Shl, false, true),
+    ("Shift right (bits)", TKind::Shr, false, true),
+    ("Reverse bytes", TKind::Reverse, false, false),
+    ("Byte-swap (endian)", TKind::Swap, false, false),
+    ("Flip ASCII case", TKind::FlipCase, false, false),
+];
 
 /// Open a path with the operating system's default handler.
 fn open_in_default_app(path: &std::path::Path) -> std::io::Result<()> {

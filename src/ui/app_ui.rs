@@ -15,6 +15,8 @@ impl eframe::App for App {
         self.export_window(ctx);
         self.pattern_window(ctx);
         self.tools_window(ctx);
+        self.transform_window(ctx);
+        self.strings_window(ctx);
         self.regions_window(ctx);
         self.about_window(ctx);
         self.progress_window(ctx);
@@ -23,6 +25,9 @@ impl eframe::App for App {
         if !ctx.wants_keyboard_input() && self.bg.is_none() {
             self.handle_keys(ctx);
         }
+
+        // Side panel must be declared before the central panel.
+        self.inspector_panel(ctx);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(theme::BG))
@@ -154,6 +159,8 @@ impl App {
                     self.view_mode = ViewMode::TextOnly;
                 }
                 ui.separator();
+                ui.checkbox(&mut self.inspector_open, "Data inspector panel");
+                ui.separator();
                 ui.label("Data-folds / regions");
                 if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("Fold selection")).clicked() {
                     self.fold_selection(true);
@@ -199,6 +206,14 @@ impl App {
                 }
                 if ui.button("Insert byte pattern…").clicked() {
                     self.pattern.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Transform selection…").clicked() {
+                    self.transform.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Extract strings…").clicked() {
+                    self.strings.open = true;
                     ui.close_menu();
                 }
                 ui.separator();
@@ -1064,6 +1079,153 @@ impl App {
                 }
             });
         self.regions_open = open;
+    }
+
+    fn inspector_panel(&mut self, ctx: &egui::Context) {
+        if !self.inspector_open {
+            return;
+        }
+        let mut open = self.inspector_open;
+        egui::SidePanel::right("inspector")
+            .resizable(true)
+            .default_width(260.0)
+            .frame(egui::Frame::none().fill(theme::PANEL).inner_margin(8.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("DATA INSPECTOR").color(theme::GREEN).strong());
+                    if ui.small_button("✕").clicked() {
+                        open = false;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("byte order:");
+                    ui.selectable_value(&mut self.inspector_le, true, "LE");
+                    ui.selectable_value(&mut self.inspector_le, false, "BE");
+                });
+                ui.label(
+                    egui::RichText::new(format!("@ {:#X}", self.cursor)).color(theme::ADDR),
+                );
+                ui.separator();
+                let window = self.doc.read_range(self.cursor, 16);
+                let interps = inspect::inspect(&window, self.inspector_le);
+                egui::Grid::new("inspector_grid")
+                    .num_columns(2)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        for it in &interps {
+                            ui.label(egui::RichText::new(it.label).color(theme::GREEN_DIM));
+                            ui.label(egui::RichText::new(&it.value).color(theme::GREEN).monospace());
+                            ui.end_row();
+                        }
+                    });
+            });
+        self.inspector_open = open;
+    }
+
+    fn transform_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.transform.open;
+        egui::Window::new("Transform selection")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                if self.selection_range().is_none() {
+                    ui.label(
+                        egui::RichText::new("select a range in the editor first")
+                            .color(theme::AMBER),
+                    );
+                }
+                egui::ComboBox::from_label("Operation")
+                    .selected_text(TRANSFORM_OPS[self.transform.op].0)
+                    .show_ui(ui, |ui| {
+                        for (i, t) in TRANSFORM_OPS.iter().enumerate() {
+                            ui.selectable_value(&mut self.transform.op, i, t.0);
+                        }
+                    });
+                let (_, _, needs_key, needs_count) = TRANSFORM_OPS[self.transform.op];
+                if needs_key {
+                    ui.horizontal(|ui| {
+                        ui.label("Key (hex byte):");
+                        ui.text_edit_singleline(&mut self.transform.key);
+                    });
+                }
+                if needs_count {
+                    ui.horizontal(|ui| {
+                        ui.label("Count (bits 0-8):");
+                        ui.text_edit_singleline(&mut self.transform.key);
+                    });
+                }
+                if matches!(TRANSFORM_OPS[self.transform.op].1, TKind::Swap) {
+                    ui.horizontal(|ui| {
+                        ui.label("Group size:");
+                        for g in [2usize, 4, 8] {
+                            ui.selectable_value(&mut self.transform.swap_group, g, format!("{g}"));
+                        }
+                    });
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(self.selection_range().is_some(), egui::Button::new("Apply"))
+                    .clicked()
+                {
+                    self.apply_transform();
+                }
+            });
+        self.transform.open = open;
+    }
+
+    fn strings_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.strings.open;
+        let mut jump: Option<u64> = None;
+        egui::Window::new("Extract strings")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Min length:");
+                    ui.add(egui::TextEdit::singleline(&mut self.strings.min_len).desired_width(48.0));
+                    ui.checkbox(&mut self.strings.whole_file, "Whole file (else selection)");
+                    if ui.button("Scan").clicked() {
+                        self.do_strings();
+                    }
+                });
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!("{} result(s)", self.strings.results.len()))
+                        .color(theme::GREEN_DIM),
+                );
+                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                    egui::Grid::new("strings_grid")
+                        .num_columns(3)
+                        .striped(true)
+                        .show(ui, |ui| {
+                            for f in &self.strings.results {
+                                if ui
+                                    .add(egui::Label::new(
+                                        egui::RichText::new(format!("{:#010X}", f.offset))
+                                            .color(theme::ADDR),
+                                    )
+                                    .sense(egui::Sense::click()))
+                                    .clicked()
+                                {
+                                    jump = Some(f.offset);
+                                }
+                                let kind = match f.kind {
+                                    crate::ops::strings::Kind::Ascii => "A",
+                                    crate::ops::strings::Kind::Utf16 => "U",
+                                };
+                                ui.label(egui::RichText::new(kind).color(theme::GREEN_DIM));
+                                ui.label(egui::RichText::new(&f.text).monospace());
+                                ui.end_row();
+                            }
+                        });
+                });
+                ui.label(egui::RichText::new("click an offset to jump there").small().color(theme::GREEN_DIM));
+            });
+        if let Some(off) = jump {
+            self.set_cursor(off, false);
+        }
+        self.strings.open = open;
     }
 
     fn about_window(&mut self, ctx: &egui::Context) {

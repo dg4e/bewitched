@@ -7,9 +7,12 @@
 pub mod checksum;
 pub mod export;
 pub mod fileops;
+pub mod inspect;
 pub mod pattern;
 pub mod search;
 pub mod stats;
+pub mod strings;
+pub mod transform;
 
 /// Cooperative progress/cancel handle shared with long-running operations.
 #[derive(Clone)]
