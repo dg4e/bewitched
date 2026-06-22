@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use egui::{Key, Sense};
 
-use crate::data::{Document, Region, RowItem, ViewMap};
+use crate::data::{Document, MemRegion, ProcessHandle, ProcessSource, Region, RowItem, ViewMap};
 use crate::ops::{
     byteplot, checksum, diff, disasm, export, fileops, inspect, patch, pattern, scan, search,
     signatures, stats, strings, template, transform, Progress,
@@ -136,6 +136,23 @@ struct DiffState {
     other: Option<PathBuf>,
     ranges: Vec<diff::DiffRange>,
     status: String,
+}
+
+#[derive(Default)]
+struct ProcessUiState {
+    open: bool,
+    pid: String,
+    base: String,
+    len: String,
+    regions: Vec<MemRegion>,
+    status: String,
+}
+
+/// Active live-memory target: the bytes shown are a window of this process at
+/// `base`, so edits can be poked straight back.
+struct ProcTarget {
+    handle: std::sync::Arc<ProcessHandle>,
+    base: u64,
 }
 
 struct TemplateState {
@@ -303,6 +320,8 @@ pub struct App {
     diff: DiffState,
     disasm: DisasmState,
     template: TemplateState,
+    process_ui: ProcessUiState,
+    process_target: Option<ProcTarget>,
     inspector_open: bool,
     inspector_le: bool,
     regions_open: bool,
@@ -365,6 +384,11 @@ impl App {
             diff: DiffState::default(),
             disasm: DisasmState::default(),
             template: TemplateState::default(),
+            process_ui: ProcessUiState {
+                len: "4096".into(),
+                ..Default::default()
+            },
+            process_target: None,
             inspector_open: true,
             inspector_le: true,
             regions_open: false,
@@ -422,6 +446,7 @@ impl App {
         self.nibble = 0;
         self.sel_anchor = None;
         self.regions.clear();
+        self.process_target = None;
         self.scroll_to_cursor = true;
     }
 
@@ -559,6 +584,12 @@ impl App {
         for off in &offsets {
             self.doc.overwrite(*off, &needle);
         }
+        // If viewing live memory, poke each location straight into the process.
+        if let Some(meta) = &self.process_target {
+            for off in &offsets {
+                let _ = meta.handle.write(meta.base + off, &needle);
+            }
+        }
         self.scan.status = format!("wrote value to {} location(s)", offsets.len());
         self.scroll_to_cursor = true;
     }
@@ -689,6 +720,73 @@ impl App {
             if r.truncated { " (truncated)" } else { "" }
         );
         self.diff.ranges = r.ranges;
+    }
+
+    // ---- live process memory ----
+
+    fn process_pid(&self) -> Option<u32> {
+        self.process_ui.pid.trim().parse().ok()
+    }
+
+    fn list_process_regions(&mut self) {
+        let Some(pid) = self.process_pid() else {
+            self.process_ui.status = "enter a numeric PID".into();
+            return;
+        };
+        match ProcessHandle::open(pid).and_then(|h| h.regions()) {
+            Ok(mut r) => {
+                r.retain(|x| x.readable);
+                self.process_ui.status = format!("{} readable region(s)", r.len());
+                self.process_ui.regions = r;
+            }
+            Err(e) => {
+                self.process_ui.status = format!("error: {e}");
+                self.process_ui.regions.clear();
+            }
+        }
+    }
+
+    fn open_process(&mut self) {
+        let Some(pid) = self.process_pid() else {
+            self.process_ui.status = "enter a numeric PID".into();
+            return;
+        };
+        let base = parse_addr(&self.process_ui.base).unwrap_or(0);
+        let len = parse_addr(&self.process_ui.len).unwrap_or(0);
+        if len == 0 {
+            self.process_ui.status = "enter a non-zero length".into();
+            return;
+        }
+        let handle = match ProcessHandle::open(pid) {
+            Ok(h) => std::sync::Arc::new(h),
+            Err(e) => {
+                self.process_ui.status = format!("open failed: {e}");
+                return;
+            }
+        };
+        let label = format!("pid {pid} @ {base:#X}");
+        let src = ProcessSource::new(handle.clone(), base, len, label.clone());
+        self.doc = Document::from_source(std::sync::Arc::new(src));
+        self.reset_cursor();
+        self.process_target = Some(ProcTarget { handle, base });
+        self.status = format!("opened live memory: {label} ({} bytes)", len);
+    }
+
+    /// Write the current selection's bytes straight into the target process.
+    fn poke_selection_to_process(&mut self) {
+        let Some(meta) = &self.process_target else {
+            self.status = "not viewing a live process".into();
+            return;
+        };
+        let Some((s, e)) = self.selection_range() else {
+            self.status = "select bytes to poke".into();
+            return;
+        };
+        let bytes = self.doc.read_range(s, (e - s) as usize);
+        match meta.handle.write(meta.base + s, &bytes) {
+            Ok(n) => self.status = format!("poked {n} byte(s) to process at {:#X}", meta.base + s),
+            Err(err) => self.status = format!("poke failed: {err}"),
+        }
     }
 
     // ---- binary templates ----

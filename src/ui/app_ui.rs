@@ -23,6 +23,7 @@ impl eframe::App for App {
         self.diff_window(ctx);
         self.disasm_window(ctx);
         self.template_window(ctx);
+        self.process_window(ctx);
         self.regions_window(ctx);
         self.about_window(ctx);
         self.progress_window(ctx);
@@ -69,6 +70,10 @@ impl App {
                             .color(theme::GREEN_DIM),
                     );
                 });
+                if ui.button("Open process memory…").clicked() {
+                    self.process_ui.open = true;
+                    ui.close_menu();
+                }
                 ui.separator();
                 if ui.button("Save   Ctrl+S").clicked() {
                     self.save();
@@ -129,6 +134,17 @@ impl App {
                 if ui.button("Select all   Ctrl+A").clicked() {
                     self.sel_anchor = Some(0);
                     self.cursor = self.doc.len().saturating_sub(1);
+                    ui.close_menu();
+                }
+                if self.process_target.is_some()
+                    && ui
+                        .add_enabled(
+                            self.selection_range().is_some(),
+                            egui::Button::new("Poke selection → process"),
+                        )
+                        .clicked()
+                {
+                    self.poke_selection_to_process();
                     ui.close_menu();
                 }
                 ui.separator();
@@ -1676,6 +1692,87 @@ impl App {
             self.set_cursor(off, false);
         }
         self.template.open = open;
+    }
+
+    fn process_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.process_ui.open;
+        let mut pick: Option<(u64, u64)> = None;
+        egui::Window::new("Open process memory")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "View and edit a running process's memory live. Other processes need \
+                         root / task_for_pid (macOS) or ptrace (Linux) permission; your own \
+                         PID always works.",
+                    )
+                    .small()
+                    .color(theme::GREEN_DIM),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("PID:");
+                    ui.add(egui::TextEdit::singleline(&mut self.process_ui.pid).desired_width(80.0));
+                    if ui.button("List regions").clicked() {
+                        self.list_process_regions();
+                    }
+                    if ui.button(format!("use self ({})", std::process::id())).clicked() {
+                        self.process_ui.pid = std::process::id().to_string();
+                        self.list_process_regions();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Base:");
+                    ui.add(egui::TextEdit::singleline(&mut self.process_ui.base).desired_width(140.0));
+                    ui.label("Length:");
+                    ui.add(egui::TextEdit::singleline(&mut self.process_ui.len).desired_width(100.0));
+                    if ui.button("Open live view").clicked() {
+                        self.open_process();
+                    }
+                });
+                if !self.process_ui.status.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&self.process_ui.status)
+                            .color(theme::status_color(&self.process_ui.status)),
+                    );
+                }
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    egui::Grid::new("proc_regions").num_columns(3).striped(true).show(ui, |ui| {
+                        ui.label(egui::RichText::new("base").color(theme::ADDR));
+                        ui.label(egui::RichText::new("size").color(theme::ADDR));
+                        ui.label(egui::RichText::new("perms").color(theme::ADDR));
+                        ui.end_row();
+                        for r in &self.process_ui.regions {
+                            if ui
+                                .add(egui::Label::new(
+                                    egui::RichText::new(format!("{:#018X}", r.base))
+                                        .color(theme::GREEN),
+                                ).sense(egui::Sense::click()))
+                                .on_hover_text("click to load base/length")
+                                .clicked()
+                            {
+                                pick = Some((r.base, r.size));
+                            }
+                            ui.label(egui::RichText::new(human(r.size)).monospace());
+                            let perms = format!(
+                                "{}{}{}",
+                                if r.readable { "r" } else { "-" },
+                                if r.writable { "w" } else { "-" },
+                                if r.executable { "x" } else { "-" },
+                            );
+                            ui.label(egui::RichText::new(perms).color(theme::GREEN_DIM));
+                            ui.end_row();
+                        }
+                    });
+                });
+            });
+        if let Some((base, size)) = pick {
+            self.process_ui.base = format!("{:#X}", base);
+            self.process_ui.len = format!("{}", size.min(1 << 24)); // cap default to 16 MiB
+        }
+        self.process_ui.open = open;
     }
 
     fn about_window(&mut self, ctx: &egui::Context) {
