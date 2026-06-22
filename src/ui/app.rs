@@ -9,7 +9,7 @@ use egui::{Key, Sense};
 use crate::data::{Document, Region, RowItem, ViewMap};
 use crate::ops::{
     byteplot, checksum, diff, disasm, export, fileops, inspect, patch, pattern, scan, search,
-    signatures, stats, strings, transform, Progress,
+    signatures, stats, strings, template, transform, Progress,
 };
 
 use super::charset::Charset;
@@ -136,6 +136,26 @@ struct DiffState {
     other: Option<PathBuf>,
     ranges: Vec<diff::DiffRange>,
     status: String,
+}
+
+struct TemplateState {
+    open: bool,
+    builtin: usize,
+    src: String,
+    fields: Vec<template::Field>,
+    status: String,
+}
+
+impl Default for TemplateState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            builtin: 0,
+            src: template::BUILTINS[0].1.to_string(),
+            fields: Vec::new(),
+            status: String::new(),
+        }
+    }
 }
 
 struct DisasmState {
@@ -282,6 +302,7 @@ pub struct App {
     byteplot: ByteplotState,
     diff: DiffState,
     disasm: DisasmState,
+    template: TemplateState,
     inspector_open: bool,
     inspector_le: bool,
     regions_open: bool,
@@ -343,6 +364,7 @@ impl App {
             byteplot: ByteplotState::default(),
             diff: DiffState::default(),
             disasm: DisasmState::default(),
+            template: TemplateState::default(),
             inspector_open: true,
             inspector_le: true,
             regions_open: false,
@@ -667,6 +689,27 @@ impl App {
             if r.truncated { " (truncated)" } else { "" }
         );
         self.diff.ranges = r.ranges;
+    }
+
+    // ---- binary templates ----
+
+    fn apply_template(&mut self) {
+        match template::Template::parse(&self.template.src) {
+            Ok(tmpl) => match template::apply(&tmpl, &self.doc, self.cursor) {
+                Ok(fields) => {
+                    self.template.status = format!("parsed {} field(s)", fields.len());
+                    self.template.fields = fields;
+                }
+                Err(e) => {
+                    self.template.status = e;
+                    self.template.fields.clear();
+                }
+            },
+            Err(e) => {
+                self.template.status = e;
+                self.template.fields.clear();
+            }
+        }
     }
 
     // ---- printing ----

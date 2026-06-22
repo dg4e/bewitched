@@ -18,6 +18,7 @@ pub mod search;
 pub mod signatures;
 pub mod stats;
 pub mod strings;
+pub mod template;
 pub mod transform;
 
 /// Cooperative progress/cancel handle shared with long-running operations.
