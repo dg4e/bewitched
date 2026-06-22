@@ -19,6 +19,8 @@ impl eframe::App for App {
         self.strings_window(ctx);
         self.scan_window(ctx);
         self.signatures_window(ctx);
+        self.byteplot_window(ctx);
+        self.diff_window(ctx);
         self.regions_window(ctx);
         self.about_window(ctx);
         self.progress_window(ctx);
@@ -233,6 +235,14 @@ impl App {
                 }
                 if ui.button("Find signatures (binwalk)…").clicked() {
                     self.signatures.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Byte map (visualize)…").clicked() {
+                    self.byteplot.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Compare / diff (detailed)…").clicked() {
+                    self.diff.open = true;
                     ui.close_menu();
                 }
                 ui.separator();
@@ -1435,6 +1445,109 @@ impl App {
             self.set_cursor(off, false);
         }
         self.signatures.open = open;
+    }
+
+    fn byteplot_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.byteplot.open;
+        let mut render = false;
+        let mut jump: Option<u64> = None;
+        let len = self.doc.len();
+        egui::Window::new("Byte map")
+            .open(&mut open)
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Render").clicked() {
+                        render = true;
+                    }
+                    ui.label(
+                        egui::RichText::new("each pixel = one byte (sampled), colored by class")
+                            .small()
+                            .color(theme::GREEN_DIM),
+                    );
+                });
+                if let Some(tex) = &self.byteplot.texture {
+                    let side = 512.0;
+                    let resp = ui.add(
+                        egui::Image::new(tex)
+                            .fit_to_exact_size(egui::vec2(side, side))
+                            .sense(egui::Sense::click()),
+                    );
+                    if resp.clicked() {
+                        if let Some(pos) = resp.interact_pointer_pos() {
+                            let rect = resp.rect;
+                            let fx = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 0.999);
+                            let fy = ((pos.y - rect.top()) / rect.height()).clamp(0.0, 0.999);
+                            let (w, h) = (self.byteplot.width, self.byteplot.height);
+                            let px = (fy * h as f32) as u64 * w as u64 + (fx * w as f32) as u64;
+                            jump = Some(byteplot::sample_offset(px, (w * h) as u64, len).min(len));
+                        }
+                    }
+                    ui.label(
+                        egui::RichText::new("click a pixel to jump there").small().color(theme::GREEN_DIM),
+                    );
+                } else {
+                    ui.label(egui::RichText::new("press Render").color(theme::GREEN_DIM));
+                }
+            });
+        if render {
+            self.build_byteplot(ctx);
+        }
+        if let Some(off) = jump {
+            self.set_cursor(off, false);
+        }
+        self.byteplot.open = open;
+    }
+
+    fn diff_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.diff.open;
+        let mut jump: Option<u64> = None;
+        egui::Window::new("Compare / diff")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Pick file & diff").clicked() {
+                        self.do_diff();
+                    }
+                    if let Some(p) = &self.diff.other {
+                        ui.label(
+                            egui::RichText::new(p.file_name().unwrap_or_default().to_string_lossy())
+                                .color(theme::ADDR),
+                        );
+                    }
+                });
+                if !self.diff.status.is_empty() {
+                    ui.label(egui::RichText::new(&self.diff.status).color(theme::AMBER));
+                }
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                    egui::Grid::new("diff_grid").num_columns(2).striped(true).show(ui, |ui| {
+                        ui.label(egui::RichText::new("offset").color(theme::ADDR));
+                        ui.label(egui::RichText::new("length").color(theme::ADDR));
+                        ui.end_row();
+                        for r in &self.diff.ranges {
+                            if ui
+                                .add(egui::Label::new(
+                                    egui::RichText::new(format!("{:#010X}", r.offset))
+                                        .color(theme::GREEN),
+                                ).sense(egui::Sense::click()))
+                                .clicked()
+                            {
+                                jump = Some(r.offset);
+                            }
+                            ui.label(egui::RichText::new(format!("{}", r.len)).monospace());
+                            ui.end_row();
+                        }
+                    });
+                });
+                ui.label(egui::RichText::new("click an offset to jump there").small().color(theme::GREEN_DIM));
+            });
+        if let Some(off) = jump {
+            self.set_cursor(off, false);
+        }
+        self.diff.open = open;
     }
 
     fn about_window(&mut self, ctx: &egui::Context) {

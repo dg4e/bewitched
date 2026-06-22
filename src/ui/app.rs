@@ -8,8 +8,8 @@ use egui::{Key, Sense};
 
 use crate::data::{Document, Region, RowItem, ViewMap};
 use crate::ops::{
-    checksum, export, fileops, inspect, patch, pattern, scan, search, signatures, stats, strings,
-    transform, Progress,
+    byteplot, checksum, diff, export, fileops, inspect, patch, pattern, scan, search, signatures,
+    stats, strings, transform, Progress,
 };
 
 use super::charset::Charset;
@@ -110,6 +110,32 @@ struct StatsState {
 struct SignaturesState {
     open: bool,
     results: Vec<signatures::Hit>,
+}
+
+struct ByteplotState {
+    open: bool,
+    texture: Option<egui::TextureHandle>,
+    width: usize,
+    height: usize,
+}
+
+impl Default for ByteplotState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            texture: None,
+            width: 256,
+            height: 256,
+        }
+    }
+}
+
+#[derive(Default)]
+struct DiffState {
+    open: bool,
+    other: Option<PathBuf>,
+    ranges: Vec<diff::DiffRange>,
+    status: String,
 }
 
 #[derive(Default)]
@@ -239,6 +265,8 @@ pub struct App {
     strings: StringsState,
     scan: ScanState,
     signatures: SignaturesState,
+    byteplot: ByteplotState,
+    diff: DiffState,
     inspector_open: bool,
     inspector_le: bool,
     regions_open: bool,
@@ -297,6 +325,8 @@ impl App {
             },
             scan: ScanState::default(),
             signatures: SignaturesState::default(),
+            byteplot: ByteplotState::default(),
+            diff: DiffState::default(),
             inspector_open: true,
             inspector_le: true,
             regions_open: false,
@@ -584,6 +614,43 @@ impl App {
         self.doc.overwrite(self.cursor, &bytes);
         self.status = format!("wrote {}-byte digest at {:#X}", bytes.len(), self.cursor);
         self.scroll_to_cursor = true;
+    }
+
+    // ---- visualizations ----
+
+    fn build_byteplot(&mut self, ctx: &egui::Context) {
+        let (w, h) = (self.byteplot.width, self.byteplot.height);
+        let rgba = byteplot::build_rgba(&self.doc, 0, self.doc.len(), w, h, &Progress::default());
+        let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+        self.byteplot.texture =
+            Some(ctx.load_texture("byteplot", image, egui::TextureOptions::NEAREST));
+        self.status = "rendered byte map".into();
+    }
+
+    fn do_diff(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Compare against…")
+            .pick_file()
+        else {
+            return;
+        };
+        let other = match Document::open_file(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.diff.status = format!("open failed: {e}");
+                return;
+            }
+        };
+        let r = diff::diff(&self.doc, &other, 100_000, &Progress::default());
+        self.diff.other = Some(path);
+        self.diff.status = format!(
+            "{} differing range(s); sizes {} vs {}{}",
+            r.ranges.len(),
+            r.len_a,
+            r.len_b,
+            if r.truncated { " (truncated)" } else { "" }
+        );
+        self.diff.ranges = r.ranges;
     }
 
     // ---- printing ----

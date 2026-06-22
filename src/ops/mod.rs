@@ -4,7 +4,9 @@
 //! byte range) and returns data or progress, so they can be unit-tested and, in
 //! future, driven from a CLI.
 
+pub mod byteplot;
 pub mod checksum;
+pub mod diff;
 pub mod export;
 pub mod fileops;
 pub mod inspect;
