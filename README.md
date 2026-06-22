@@ -50,9 +50,18 @@ blocks.
 - **Data inspector**: live side panel decoding the bytes at the cursor as
   int/uint 8–64, float32/64, ASCII/UTF-8, uLEB128, RGB/RGBA, `time_t` (32/64),
   Windows `FILETIME`, DOS date/time and GUID, with LE/BE toggle.
+- **Live process memory**: open a running process's memory (by PID + region) as
+  a live view — read, edit and poke it back. macOS (Mach VM) and Linux
+  (`/proc/<pid>/mem`); your own PID needs no privileges.
 - **Value scanner** (memory/save editing): first-scan for a typed value, then
   refine (equal / changed / unchanged / increased / decreased) as the data
-  changes — the "Cheat Engine" workflow — plus "write value to all matches."
+  changes — the "Cheat Engine" workflow — plus "write value to all matches",
+  which pokes the live process when one is open.
+- **Binary templates**: a small DSL parses a file into named, typed,
+  click-to-jump fields; built-ins for BMP/PNG/ELF/WAV/GIF.
+- **Disassembly**: x86/x64 (16/32/64-bit) instruction view at the cursor.
+- **Byte map**: visualize the whole file as a colored image to spot structure;
+  click a pixel to jump.
 - **Transforms** on a selection: XOR/AND/OR/ADD/SUB/NOT, rotate, shift,
   reverse, byte-swap (endian) and ASCII case-flip.
 - **String extraction**: streaming ASCII + UTF-16LE scan with click-to-jump.
@@ -85,7 +94,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (116 tests)
+cargo test                          # run the test suite (144 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -118,6 +127,7 @@ src/
     source.rs   DataSource trait + mmap/file/memory sources
     document.rs piece-table, undo/redo, ByteReader trait + Send snapshot
     regions.rs  foldable regions ("data-folds") + offset/row view map
+    process.rs  live process memory (Mach VM / /proc) + ProcessSource
   ops/          feature operations (all unit-tested)
     search.rs   streaming multi-type find / replace
     checksum.rs streaming digests
@@ -131,6 +141,10 @@ src/
     scan.rs     value scanner (first-scan + refine)
     signatures.rs binwalk-style format/crypto signature scan
     patch.rs    IPS patch create / parse / apply
+    diff.rs     detailed binary diff (all differing ranges)
+    byteplot.rs byte-as-pixel visualization
+    disasm.rs   x86/x64 disassembly (iced-x86)
+    template.rs binary template DSL + interpreter + built-ins
   ui/           egui front-end
     app.rs / app_ui.rs   application state, menus, hex view, dialogs
     hexview.rs  column math, colored row building, click hit-testing
@@ -140,7 +154,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **116 tests**
+Engine, feature operations and GUI are implemented and covered by **144 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 

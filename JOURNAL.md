@@ -452,7 +452,47 @@ The GUI wiring stays thin: read-only scans (`scan`, `signatures`, `strings`) run
 on a worker thread via the `Send` snapshot and a `BgOutcome` variant; `refine`,
 transforms, patch-apply and the inspector are fast and run inline.
 
-## 9. Known limitations and future work
+## 9. Visualization, disassembly, templates and live memory
+
+A further wave added the "heavy" features. The first three keep the same
+pure-core discipline; the fourth required a small engine addition.
+
+- **Byte map** (`byteplot.rs`) maps each pixel to a sampled byte, colored by
+  class, so structure is visible at a glance. The color and pixel→offset
+  functions are pure and tested; the UI uploads the RGBA buffer as an egui
+  texture and reverses the mapping on click.
+
+- **Detailed diff** (`diff.rs`) streams two sources and groups differing bytes
+  into ranges (with a length-mismatch tail and a cap), complementing the simple
+  first-difference `fileops::compare`.
+
+- **Disassembly** (`disasm.rs`) is the one place a dependency earns its keep:
+  `iced-x86` is a pure-Rust x86/x64 decoder (no C toolchain), so it stays within
+  the "one `cargo build`" promise. It decodes from a bounded window at the cursor
+  and is tested against known encodings, including how bitness changes decoding.
+
+- **Binary templates** (`template.rs`) are the biggest usability lever and were
+  built *without* a dependency: a compact line-oriented DSL (`magic`, `le/be`,
+  `u8..u64/i8..i64/f32/f64`, `ascii/bytes` with literal-or-field-reference
+  lengths, `skip`) plus an interpreter that walks a document into named, typed,
+  click-to-jump fields. Field-reference lengths make length-prefixed structures
+  parse correctly. Built-ins cover BMP/PNG/ELF/WAV/GIF.
+
+- **Live process memory** (`data/process.rs`) is the only feature that touched
+  the engine. `ProcessHandle` reads/writes another process and lists its mapped
+  regions — macOS via Mach VM (`task_for_pid`, `mach_vm_read_overwrite/write/
+  region`), Linux via `/proc/<pid>/mem` + `maps`, with a graceful stub elsewhere.
+  `ProcessSource` implements `DataSource` over a chosen `[base, len)` window, so
+  the *entire* editor — view, scanner, inspector, templates, disassembly — works
+  on running memory unchanged; that reuse is the payoff of putting `DataSource`
+  at the bottom of the stack. Writes are explicit (Edit ▸ Poke selection, and the
+  scanner's "write to all matches"), because edits otherwise accumulate in the
+  piece-table overlay rather than the process. The catch with cross-process
+  access is privilege (root / `task_for_pid` / `ptrace`) and that it can't be
+  exercised in CI — so the tests operate on our **own** process memory, which
+  needs no privileges and genuinely verifies the read *and* write paths.
+
+## 10. Known limitations and future work
 
 - **Folded cursor.** Navigation stays in offset space, so the cursor can sit
   inside a collapsed region (invisible until unfolded). A future version could
@@ -467,23 +507,21 @@ transforms, patch-apply and the inspector are fast and run inline.
   them automatically from OS memory maps (`/proc/.../maps`, Mach VM regions,
   `VirtualQuery`) when opening a memory source is a natural extension.
 
-### Deferred "heavy" features
+### Still on the list
 
-These are wanted but each carries a real cost (a large dependency, platform code
-that can't be verified in CI, or substantial new UI), so they are called out
-rather than half-built:
+The big feature tier (live process memory, binary templates, disassembly,
+byte-map + detailed diff) is now implemented; what remains is smaller or
+genuinely optional:
 
-- **Live process memory backend.** The value scanner already works on any
-  `ByteReader`; what's missing is a *writable* `DataSource` over another
-  process's address space (`process_vm_readv`/`writev` + `/proc/<pid>/maps` on
-  Linux, `mach_vm_read/write` on macOS, `Read/WriteProcessMemory` on Windows).
-  This needs elevated privileges, is sparse/64-bit-addressed, and requires
-  extending the engine with a write-through (non-piece-table) source model — a
-  meaningful design change, and untestable without a target process.
-- **Binary templates / Kaitai Struct.** A parser/DSL to turn a file into named,
-  typed, editable fields — the single biggest UX upgrade, but a large subsystem.
-- **Disassembly pane.** Straightforward via `capstone`/`iced-x86`, but pulls in a
-  sizable dependency.
-- **Byte-as-pixel visualization, two-pane synchronized diff, scripting
-  (`rhai`/`lua`), multi-cursor, persistent annotations sidecar.** Each is mostly
-  new UI and/or a dependency rather than new engine work.
+- **Windows process backend.** macOS and Linux are done; Windows would use
+  `OpenProcess` + `Read/WriteProcessMemory` + `VirtualQueryEx` (needs the
+  `windows`/`windows-sys` crate).
+- **Editing live memory through the cursor.** Hex-view edits currently go to the
+  piece-table overlay; poking is explicit (selection / scanner). A "write-through"
+  source mode could make every keystroke hit the process directly.
+- **Field editing in templates.** Templates currently *display* parsed fields;
+  letting you edit a field by value (and write it back) is a natural next step.
+- **ARM/other disassembly.** `iced-x86` is x86-only; ARM/RISC-V would need
+  another decoder (likely `capstone`, a C dependency).
+- **Scripting (`rhai`/`lua`), multi-cursor, persistent annotations sidecar.**
+  Each is mostly new UI and/or a dependency rather than new engine work.
