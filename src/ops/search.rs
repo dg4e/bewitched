@@ -324,4 +324,76 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(doc.to_vec(), b"aYYaYYa");
     }
+
+    #[test]
+    fn all_direction_starts_at_zero() {
+        let doc = d(b"--needle--needle");
+        assert_eq!(find(&doc, b"needle", 12, Direction::All, false), Some(2));
+    }
+
+    #[test]
+    fn cross_window_boundary() {
+        // needle straddling the 1 MiB scan window boundary must still be found
+        let win = 1usize << 20;
+        let mut data = vec![b'.'; win + 16];
+        let pos = win - 2;
+        data[pos..pos + 4].copy_from_slice(b"GANG");
+        let doc = d(&data);
+        assert_eq!(find(&doc, b"GANG", 0, Direction::Forward, false), Some(pos as u64));
+        assert_eq!(
+            find(&doc, b"GANG", data.len() as u64, Direction::Backward, false),
+            Some(pos as u64)
+        );
+    }
+
+    #[test]
+    fn not_found_returns_none() {
+        let doc = d(b"abcdef");
+        assert_eq!(find(&doc, b"zzz", 0, Direction::Forward, false), None);
+        assert_eq!(find(&doc, b"zzz", 6, Direction::Backward, false), None);
+    }
+
+    #[test]
+    fn utf16_needle() {
+        let le = needle_bytes("Hi", DataType::Utf16, Endian::Little, false).unwrap();
+        assert_eq!(le, vec![b'H', 0, b'i', 0]);
+        let be = needle_bytes("Hi", DataType::Utf16, Endian::Big, false).unwrap();
+        assert_eq!(be, vec![0, b'H', 0, b'i']);
+    }
+
+    #[test]
+    fn float_and_i64_needles() {
+        let f = needle_bytes("1.0", DataType::F32, Endian::Little, false).unwrap();
+        assert_eq!(f, 1.0f32.to_le_bytes().to_vec());
+        let q = needle_bytes("1", DataType::I64, Endian::Big, false).unwrap();
+        assert_eq!(q, vec![0, 0, 0, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn hex_odd_length_errors() {
+        assert!(needle_bytes("ABC", DataType::Hex, Endian::Little, false).is_err());
+        assert!(needle_bytes("ZZ", DataType::Hex, Endian::Little, false).is_err());
+    }
+
+    #[test]
+    fn replace_to_shorter_and_empty() {
+        let mut doc = d(b"aXXbXXc");
+        let p = super::super::Progress::default();
+        let n = replace_all(&mut doc, b"XX", b"_", false, &p);
+        assert_eq!(n, 2);
+        assert_eq!(doc.to_vec(), b"a_b_c");
+
+        let mut doc = d(b"a-b-c");
+        let n = replace_all(&mut doc, b"-", b"", false, &super::super::Progress::default());
+        assert_eq!(n, 2);
+        assert_eq!(doc.to_vec(), b"abc");
+    }
+
+    #[test]
+    fn overlapping_matches_forward_step() {
+        // "aaa" searching "aa": matches at 0; next from 2 -> none (non-overlapping step)
+        let doc = d(b"aaaa");
+        assert_eq!(find(&doc, b"aa", 0, Direction::Forward, false), Some(0));
+        assert_eq!(find(&doc, b"aa", 1, Direction::Forward, false), Some(1));
+    }
 }

@@ -10,8 +10,18 @@ pub const GREEN_DIM: Color32 = Color32::from_rgb(0x33, 0x88, 0x55);
 pub const GREEN_FAINT: Color32 = Color32::from_rgb(0x2a, 0x55, 0x3a);
 pub const ADDR: Color32 = Color32::from_rgb(0x55, 0x99, 0x77);
 pub const AMBER: Color32 = Color32::from_rgb(0xff, 0xb8, 0x4d);
-#[allow(dead_code)]
 pub const RED: Color32 = Color32::from_rgb(0xff, 0x55, 0x55);
+
+/// Pick a status-line color: red for failures, dim green otherwise.
+pub fn status_color(msg: &str) -> Color32 {
+    let m = msg.to_ascii_lowercase();
+    if m.contains("fail") || m.contains("error") || m.contains("invalid") || m.contains("not found")
+    {
+        RED
+    } else {
+        GREEN_DIM
+    }
+}
 pub const CURSOR_BG: Color32 = Color32::from_rgb(0x33, 0xff, 0x66);
 pub const CURSOR_FG: Color32 = Color32::from_rgb(0x05, 0x10, 0x08);
 pub const SEL_BG: Color32 = Color32::from_rgb(0x16, 0x3a, 0x28);

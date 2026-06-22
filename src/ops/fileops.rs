@@ -185,10 +185,11 @@ mod tests {
     use super::*;
 
     fn tmpdir() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut d = std::env::temp_dir();
-        // unique-ish without Date/rand: use the test thread id via address
-        let stamp = &d as *const _ as usize;
-        d.push(format!("ganghex_test_{:x}", stamp));
+        d.push(format!("ganghex_test_{:?}_{}", std::thread::current().id(), n));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -219,6 +220,53 @@ mod tests {
         std::fs::write(&f, vec![1u8; 4096]).unwrap();
         shred(&f, 3, &Progress::default()).unwrap();
         assert!(!f.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compare_equal_and_diff() {
+        let dir = tmpdir();
+        let a = dir.join("a.bin");
+        let b = dir.join("b.bin");
+        let c = dir.join("c.bin");
+        std::fs::write(&a, b"hello world").unwrap();
+        std::fs::write(&b, b"hello world").unwrap();
+        std::fs::write(&c, b"hello WORLD").unwrap();
+
+        let r = compare(&a, &b, &Progress::default()).unwrap();
+        assert!(r.equal);
+        assert_eq!(r.first_diff, None);
+
+        let r = compare(&a, &c, &Progress::default()).unwrap();
+        assert!(!r.equal);
+        assert_eq!(r.first_diff, Some(6)); // 'w' vs 'W'
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compare_size_mismatch() {
+        let dir = tmpdir();
+        let a = dir.join("a.bin");
+        let b = dir.join("b.bin");
+        std::fs::write(&a, b"abc").unwrap();
+        std::fs::write(&b, b"abcdef").unwrap();
+        let r = compare(&a, &b, &Progress::default()).unwrap();
+        assert!(!r.equal);
+        assert_eq!(r.first_diff, Some(3));
+        assert_eq!(r.len_a, 3);
+        assert_eq!(r.len_b, 6);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn split_uneven_last_part_smaller() {
+        let dir = tmpdir();
+        let src = dir.join("d.bin");
+        std::fs::write(&src, vec![7u8; 700]).unwrap();
+        let parts = split(&src, 300, &Progress::default()).unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(std::fs::metadata(&parts[2]).unwrap().len(), 100);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

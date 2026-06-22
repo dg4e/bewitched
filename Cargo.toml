@@ -28,6 +28,33 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+strip = true
 
 [profile.dev]
 opt-level = 1
+
+# Portable edition: the release binary at target/release/ganghex is fully
+# self-contained — copy it anywhere and run, no installation required.
+#
+# Installable edition: `cargo install cargo-bundle` then `cargo bundle --release`
+# produces a native installer/app bundle (.app/.dmg on macOS, .deb on Linux,
+# .msi on Windows) from the metadata below.
+[package.metadata.bundle]
+name = "ganghex"
+identifier = "net.realytcracker.ganghex"
+short_description = "A fast, cross-platform, hacker-esque hex editor."
+long_description = """
+ganghex is a fast hex editor for files, raw disks and RAM. It opens inputs of
+any size instantly via memory mapping and a piece-table edit model with
+unlimited undo, and offers search/replace, checksums, statistics, export,
+byte patterns, data-folds and file tools.
+"""
+category = "DeveloperTool"
+copyright = "Copyright (c) realytcracker"
+
+# Debian package metadata for `cargo install cargo-deb` + `cargo deb`.
+[package.metadata.deb]
+maintainer = "realytcracker <spamming@gmail.com>"
+section = "utils"
+priority = "optional"
+extended-description = "A fast, cross-platform, hacker-esque hex editor for files, disks and RAM."

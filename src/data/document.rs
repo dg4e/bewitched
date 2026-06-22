@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use super::source::{DataSource, EmptySource, MemSource};
+use super::source::{DataSource, EmptySource};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Src {
@@ -337,12 +337,12 @@ impl Document {
             f.flush()?;
         }
         std::fs::rename(&tmp, path)?;
-        self.path = Some(path.to_path_buf());
-        // After save, the on-disk bytes ARE the document; collapse history onto a
-        // fresh in-memory source so the old mmap can be released.
-        let data = self.to_vec();
-        let src = Arc::new(MemSource::new(data, self.label()));
-        *self = Self::from_source(src);
+        // After save, the on-disk bytes ARE the document. Re-open the saved file
+        // as a fresh memory-mapped source and collapse edit history onto it; this
+        // releases the old mmap and the add buffer WITHOUT loading the whole file
+        // into RAM, so saving an 8 EB document does not require 8 EB of memory.
+        let src = super::source::FileSource::open(path)?;
+        *self = Self::from_source(Arc::new(src));
         self.path = Some(path.to_path_buf());
         self.mark_saved();
         Ok(())
@@ -476,6 +476,7 @@ impl ByteReader for DocReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::MemSource;
 
     fn doc_with(data: &[u8]) -> Document {
         Document::from_source(Arc::new(MemSource::new(data.to_vec(), "t")))
@@ -576,5 +577,97 @@ mod tests {
         // after delete(3,4): xyz456789abc
         // after overwrite(0,___): ___456789abc
         assert_eq!(v, b"___456789abc");
+    }
+
+    #[test]
+    fn read_across_piece_boundaries() {
+        let mut d = doc_with(b"AAAABBBB");
+        d.insert(4, b"....."); // AAAA.....BBBB
+        // a single read spanning original/add/original pieces
+        assert_eq!(d.read_range(2, 9), b"AA.....BB");
+        assert_eq!(d.len(), 13);
+    }
+
+    #[test]
+    fn overwrite_spanning_pieces() {
+        let mut d = doc_with(b"AAAABBBB");
+        d.insert(4, b"xx"); // AAAAxxBBBB
+        d.overwrite(2, b"123456"); // span AA|xx|BB
+        assert_eq!(all(&d), b"AA123456BB");
+    }
+
+    #[test]
+    fn delete_whole_then_type() {
+        let mut d = doc_with(b"hello");
+        d.delete(0, d.len());
+        assert_eq!(d.len(), 0);
+        assert!(d.is_empty());
+        d.insert(0, b"new");
+        assert_eq!(all(&d), b"new");
+    }
+
+    #[test]
+    fn modified_flag_and_saved_marker() {
+        let mut d = doc_with(b"abcd");
+        assert!(!d.is_modified());
+        d.overwrite(0, b"X");
+        assert!(d.is_modified());
+        d.mark_saved();
+        assert!(!d.is_modified());
+        d.undo();
+        assert!(d.is_modified()); // undo moves away from saved marker
+    }
+
+    #[test]
+    fn reader_snapshot_is_independent() {
+        let mut d = doc_with(b"snapshot");
+        let snap = d.reader();
+        d.overwrite(0, b"X"); // mutate after snapshotting
+        // snapshot still reflects the state at capture time
+        let mut buf = [0u8; 8];
+        let n = ByteReader::read_at(&snap, 0, &mut buf);
+        assert_eq!(&buf[..n], b"snapshot");
+        assert_eq!(all(&d), b"Xnapshot");
+    }
+
+    #[test]
+    fn save_reopen_roundtrip() {
+        let mut path = std::env::temp_dir();
+        let stamp = &path as *const _ as usize;
+        path.push(format!("ganghex_save_{:x}.bin", stamp));
+
+        let mut d = doc_with(b"original content here");
+        d.overwrite(0, b"EDITED");
+        d.insert(d.len(), b"!!!");
+        let expect = d.to_vec();
+        d.save_to(&path).unwrap();
+
+        assert!(!d.is_modified());
+        assert!(!d.can_undo()); // history collapsed onto the saved file
+        assert_eq!(d.to_vec(), expect);
+
+        // reopen independently to confirm bytes are on disk
+        let d2 = Document::open_file(&path).unwrap();
+        assert_eq!(d2.to_vec(), expect);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn insert_at_end_repeatedly() {
+        let mut d = Document::empty();
+        for i in 0..100u8 {
+            let len = d.len();
+            d.insert(len, &[i]);
+        }
+        assert_eq!(d.len(), 100);
+        assert_eq!(d.read_range(0, 100), (0..100u8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn replace_clamps_out_of_range() {
+        let mut d = doc_with(b"abc");
+        // offset and del_len past end are clamped, not panicking
+        d.replace(100, 50, b"XY");
+        assert_eq!(all(&d), b"abcXY");
     }
 }

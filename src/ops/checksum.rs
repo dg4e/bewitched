@@ -202,4 +202,57 @@ mod tests {
         );
         assert_eq!(map[&Algo::Crc32], "352441C2");
     }
+
+    fn hashes(data: &[u8], algos: &[Algo]) -> std::collections::HashMap<Algo, String> {
+        let doc = Document::from_source(Arc::new(MemSource::new(data.to_vec(), "t")));
+        compute(&doc, 0, doc.len(), algos, &Progress::default())
+            .into_iter()
+            .collect()
+    }
+
+    #[test]
+    fn empty_input_vectors() {
+        let m = hashes(b"", &[Algo::Md5, Algo::Sha1, Algo::Crc32, Algo::Sha256]);
+        assert_eq!(m[&Algo::Md5], "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(m[&Algo::Sha1], "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(m[&Algo::Crc32], "00000000");
+        assert_eq!(
+            m[&Algo::Sha256],
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn sha512_and_crc_variants() {
+        let m = hashes(b"abc", &[Algo::Sha512, Algo::Crc16, Algo::Crc64, Algo::Adler32]);
+        assert_eq!(
+            m[&Algo::Sha512],
+            "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a\
+2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+        );
+        // CRC-16/ARC of "abc" = 0x9738
+        assert_eq!(m[&Algo::Crc16], "9738");
+        // Adler-32 of "abc" = 0x024D0127
+        assert_eq!(m[&Algo::Adler32], "024D0127");
+    }
+
+    #[test]
+    fn simple_checksums_wrap() {
+        let m = hashes(&[0xFF, 0x02], &[Algo::Checksum8, Algo::Checksum16]);
+        assert_eq!(m[&Algo::Checksum8], "01"); // 0xFF + 0x02 = 0x101 -> 0x01
+        assert_eq!(m[&Algo::Checksum16], "0101");
+    }
+
+    #[test]
+    fn cancel_stops_early() {
+        let doc = Document::from_source(Arc::new(MemSource::new(vec![0u8; 1 << 20], "t")));
+        let p = Progress::default();
+        p.cancel();
+        let r = compute(&doc, 0, doc.len(), &[Algo::Sha256], &p);
+        // cancelled before processing: result is the digest of zero bytes
+        assert_eq!(
+            r[0].1,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
 }
