@@ -21,6 +21,7 @@ impl eframe::App for App {
         self.signatures_window(ctx);
         self.byteplot_window(ctx);
         self.diff_window(ctx);
+        self.disasm_window(ctx);
         self.regions_window(ctx);
         self.about_window(ctx);
         self.progress_window(ctx);
@@ -243,6 +244,10 @@ impl App {
                 }
                 if ui.button("Compare / diff (detailed)…").clicked() {
                     self.diff.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Disassembly (x86/x64)…").clicked() {
+                    self.disasm.open = true;
                     ui.close_menu();
                 }
                 ui.separator();
@@ -1548,6 +1553,56 @@ impl App {
             self.set_cursor(off, false);
         }
         self.diff.open = open;
+    }
+
+    fn disasm_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.disasm.open;
+        let mut jump: Option<u64> = None;
+        egui::Window::new("Disassembly")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Mode:");
+                    for b in [disasm::Bits::Bits16, disasm::Bits::Bits32, disasm::Bits::Bits64] {
+                        ui.selectable_value(&mut self.disasm.bits, b, b.label());
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(format!("from cursor {:#X}", self.cursor))
+                        .color(theme::ADDR),
+                );
+                ui.separator();
+                let ins = disasm::disassemble(&self.doc, self.cursor, 64, self.disasm.bits);
+                egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                    egui::Grid::new("disasm_grid").num_columns(3).striped(true).show(ui, |ui| {
+                        for i in &ins {
+                            if ui
+                                .add(egui::Label::new(
+                                    egui::RichText::new(format!("{:08X}", i.offset))
+                                        .color(theme::ADDR),
+                                ).sense(egui::Sense::click()))
+                                .clicked()
+                            {
+                                jump = Some(i.offset);
+                            }
+                            let hex: String =
+                                i.bytes.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" ");
+                            ui.label(egui::RichText::new(hex).color(theme::GREEN_DIM).monospace());
+                            ui.label(egui::RichText::new(&i.text).color(theme::GREEN).monospace());
+                            ui.end_row();
+                        }
+                    });
+                });
+                if ins.is_empty() {
+                    ui.label(egui::RichText::new("nothing to decode at the cursor").color(theme::GREEN_DIM));
+                }
+            });
+        if let Some(off) = jump {
+            self.set_cursor(off, false);
+        }
+        self.disasm.open = open;
     }
 
     fn about_window(&mut self, ctx: &egui::Context) {

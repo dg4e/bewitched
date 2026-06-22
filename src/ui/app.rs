@@ -8,8 +8,8 @@ use egui::{Key, Sense};
 
 use crate::data::{Document, Region, RowItem, ViewMap};
 use crate::ops::{
-    byteplot, checksum, diff, export, fileops, inspect, patch, pattern, scan, search, signatures,
-    stats, strings, transform, Progress,
+    byteplot, checksum, diff, disasm, export, fileops, inspect, patch, pattern, scan, search,
+    signatures, stats, strings, transform, Progress,
 };
 
 use super::charset::Charset;
@@ -136,6 +136,20 @@ struct DiffState {
     other: Option<PathBuf>,
     ranges: Vec<diff::DiffRange>,
     status: String,
+}
+
+struct DisasmState {
+    open: bool,
+    bits: disasm::Bits,
+}
+
+impl Default for DisasmState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            bits: disasm::Bits::Bits64,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -267,6 +281,7 @@ pub struct App {
     signatures: SignaturesState,
     byteplot: ByteplotState,
     diff: DiffState,
+    disasm: DisasmState,
     inspector_open: bool,
     inspector_le: bool,
     regions_open: bool,
@@ -327,6 +342,7 @@ impl App {
             signatures: SignaturesState::default(),
             byteplot: ByteplotState::default(),
             diff: DiffState::default(),
+            disasm: DisasmState::default(),
             inspector_open: true,
             inspector_le: true,
             regions_open: false,
