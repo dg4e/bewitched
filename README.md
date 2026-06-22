@@ -44,8 +44,24 @@ blocks.
   from-start, case-insensitive, streaming (never loads the whole file).
 - **Checksums & digests**: Checksum-8/16/32, Adler-32, CRC-16, CRC-32, CRC-64,
   MD5, SHA-1, SHA-256, SHA-512 — computed in one streaming pass.
-- **Statistics**: byte/character distribution chart, Shannon entropy, and a
-  data-type classification hint.
+- **Statistics**: byte/character distribution chart, Shannon entropy, a
+  data-type classification hint, and a sampled **entropy map** strip (click to
+  jump) for spotting compressed/encrypted regions.
+- **Data inspector**: live side panel decoding the bytes at the cursor as
+  int/uint 8–64, float32/64, ASCII/UTF-8, uLEB128, RGB/RGBA, `time_t` (32/64),
+  Windows `FILETIME`, DOS date/time and GUID, with LE/BE toggle.
+- **Value scanner** (memory/save editing): first-scan for a typed value, then
+  refine (equal / changed / unchanged / increased / decreased) as the data
+  changes — the "Cheat Engine" workflow — plus "write value to all matches."
+- **Transforms** on a selection: XOR/AND/OR/ADD/SUB/NOT, rotate, shift,
+  reverse, byte-swap (endian) and ASCII case-flip.
+- **String extraction**: streaming ASCII + UTF-16LE scan with click-to-jump.
+- **Signatures (binwalk)**: locate embedded file formats, archives, executables
+  and crypto constants (AES S-box, SHA-256 constants).
+- **IPS patches**: create a patch by diffing against an original, or apply one —
+  the standard format for sharing ROM/save mods.
+- **Checksum repair**: write a computed digest back at the cursor to fix
+  checksum fields after editing.
 - **Export** (25 formats): C / C++ / Pascal / Java / C# / VB.NET / Python /
   Rust / Go / Swift / Kotlin / JavaScript / TypeScript / NASM assembly / Ruby /
   PHP / Perl source; plain hex dump / HTML / Markdown / RTF / TeX / Base64; and
@@ -69,7 +85,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (77 tests)
+cargo test                          # run the test suite (116 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -109,6 +125,12 @@ src/
     export.rs   source / text / hex-file exporters
     pattern.rs  byte-pattern generation
     fileops.rs  shred / split / concat / compare
+    inspect.rs  data inspector (typed decode of cursor bytes)
+    transform.rs in-place byte transforms (xor/rotate/swap/...)
+    strings.rs  ASCII + UTF-16 string extraction
+    scan.rs     value scanner (first-scan + refine)
+    signatures.rs binwalk-style format/crypto signature scan
+    patch.rs    IPS patch create / parse / apply
   ui/           egui front-end
     app.rs / app_ui.rs   application state, menus, hex view, dialogs
     hexview.rs  column math, colored row building, click hit-testing
@@ -118,7 +140,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **77 tests**
+Engine, feature operations and GUI are implemented and covered by **116 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 

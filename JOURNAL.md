@@ -401,7 +401,58 @@ rendering a thin, mostly-pure function of well-tested models.
 
 ---
 
-## 8. Known limitations and future work
+## 8. Analysis, scanning and patching
+
+A second wave of features was added; all follow the same rule as §4 — pure logic
+over `&dyn ByteReader` or byte slices, decoupled from the GUI and unit-tested.
+
+- **Data inspector** (`inspect.rs`) decodes the bytes at the cursor as ~18 types
+  at once (ints/floats, ASCII/UTF-8, uLEB128, RGB(A), `time_t`, `FILETIME`, DOS
+  date/time, GUID). Date conversion is done **arithmetically** via Howard
+  Hinnant's `civil_from_days` rather than pulling in a time-zone library — a few
+  lines, no dependency, and exactly testable against known epochs.
+
+- **Value scanner** (`scan.rs`) is the engine behind memory/save editing. The key
+  design point is that it is a *two-phase* operation: `first_scan` finds every
+  offset equal to a typed value; `refine` then filters a candidate set as the
+  data changes (`Eq`/`Changed`/`Unchanged`/`Increased`/`Decreased`/`>`/`<`),
+  carrying each candidate's last-seen bytes so comparative predicates work without
+  re-reading the whole input. Because it is written against `ByteReader`, the same
+  code scans a save file today and will scan live process memory the moment a
+  process-backed `DataSource` exists — no scanner changes needed. Results are
+  capped to bound memory.
+
+- **Signatures / binwalk** (`signatures.rs`) is a single streaming pass that, at
+  each byte, checks only the signatures whose first byte matches (bucketed by
+  first byte) — so adding more signatures costs almost nothing per byte. It finds
+  embedded formats, archives, executables and crypto constants (the AES S-box and
+  SHA-256 round-constant prefixes are strong, low-false-positive fingerprints).
+
+- **Entropy map** (`stats::entropy_map`) samples up to 64 KiB per bucket rather
+  than reading every byte, so the overview strip is cheap even on a multi-GB
+  input — the visualization's job is to *locate* high-entropy regions, not measure
+  them to four decimals.
+
+- **Transforms** (`transform.rs`) are pure in-place byte ops on a selection
+  (XOR/rotate/shift/swap/…), applied through the piece table like any edit, so
+  they are undoable.
+
+- **IPS patches** (`patch.rs`) implement the classic format: `make_ips` diffs two
+  buffers into records (splitting runs at the 0xFFFF size limit, erroring on the
+  16 MiB address ceiling and the reserved `EOF` offset), `parse_ips` turns a patch
+  back into `(offset, bytes)` writes (expanding RLE records). Applying a patch
+  replays those writes through `Document::overwrite`, so it is undoable and
+  extends the file when a record runs past the end.
+
+- **Checksum repair** reuses the existing digest engine plus one helper that
+  writes a hex digest back at the cursor — the common workflow of fixing a save's
+  checksum field after editing.
+
+The GUI wiring stays thin: read-only scans (`scan`, `signatures`, `strings`) run
+on a worker thread via the `Send` snapshot and a `BgOutcome` variant; `refine`,
+transforms, patch-apply and the inspector are fast and run inline.
+
+## 9. Known limitations and future work
 
 - **Folded cursor.** Navigation stays in offset space, so the cursor can sit
   inside a collapsed region (invisible until unfolded). A future version could
@@ -415,3 +466,24 @@ rendering a thin, mostly-pure function of well-tested models.
 - **RAM region discovery.** Regions are a general, user-driven feature; populating
   them automatically from OS memory maps (`/proc/.../maps`, Mach VM regions,
   `VirtualQuery`) when opening a memory source is a natural extension.
+
+### Deferred "heavy" features
+
+These are wanted but each carries a real cost (a large dependency, platform code
+that can't be verified in CI, or substantial new UI), so they are called out
+rather than half-built:
+
+- **Live process memory backend.** The value scanner already works on any
+  `ByteReader`; what's missing is a *writable* `DataSource` over another
+  process's address space (`process_vm_readv`/`writev` + `/proc/<pid>/maps` on
+  Linux, `mach_vm_read/write` on macOS, `Read/WriteProcessMemory` on Windows).
+  This needs elevated privileges, is sparse/64-bit-addressed, and requires
+  extending the engine with a write-through (non-piece-table) source model — a
+  meaningful design change, and untestable without a target process.
+- **Binary templates / Kaitai Struct.** A parser/DSL to turn a file into named,
+  typed, editable fields — the single biggest UX upgrade, but a large subsystem.
+- **Disassembly pane.** Straightforward via `capstone`/`iced-x86`, but pulls in a
+  sizable dependency.
+- **Byte-as-pixel visualization, two-pane synchronized diff, scripting
+  (`rhai`/`lua`), multi-cursor, persistent annotations sidecar.** Each is mostly
+  new UI and/or a dependency rather than new engine work.
