@@ -143,12 +143,14 @@ struct ScriptState {
     src: String,
     output: String,
     whole_file: bool,
+    library: usize,
 }
 
 impl Default for ScriptState {
     fn default() -> Self {
         Self {
             open: false,
+            library: 0,
             src: "// Rhai API: read(i) write(i,v) len() push(v) fill(s,n,v) resize(n,v)\n//   insert(i,v) remove(i,n) find_byte(v,from) find_str(s) count(v) sum() hex(s,n)\n//   read_u16/u32/u64/i16/i32/i64(i,le)  write_u16/u32/u64(i,v,le)\n//   read_f32/f64(i,le)  crc32()  to_upper()  to_lower()\n// doc: cursor() doc_len() scope_offset() sel_start() sel_len()\n//      set_cursor(i)  add_region(start,len,label)  add_note(off,len,text)\n// XOR the selection (or whole file) with 0x42:\nfor i in 0..len() {\n    write(i, read(i) ^ 0x42);\n}\n".into(),
             output: String::new(),
             whole_file: false,

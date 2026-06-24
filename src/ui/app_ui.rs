@@ -1806,11 +1806,15 @@ impl App {
                         self.run_script();
                     }
                     ui.checkbox(&mut self.script.whole_file, "Whole file (else selection)");
-                    ui.label(
-                        egui::RichText::new("sandboxed; edits are undoable")
-                            .small()
-                            .color(theme::GREEN_DIM),
-                    );
+                    egui::ComboBox::from_label("Library")
+                        .selected_text(crate::ops::script::LIBRARY[self.script.library].0)
+                        .show_ui(ui, |ui| {
+                            for (i, (name, _)) in crate::ops::script::LIBRARY.iter().enumerate() {
+                                if ui.selectable_value(&mut self.script.library, i, *name).clicked() {
+                                    self.script.src = crate::ops::script::LIBRARY[i].1.to_string();
+                                }
+                            }
+                        });
                 });
                 ui.separator();
                 egui::ScrollArea::vertical().max_height(260.0).id_salt("script_src").show(ui, |ui| {

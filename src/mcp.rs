@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 
 use crate::data::Document;
 use crate::ops::{
-    checksum, disasm, export, inspect, patch, search, signatures, stats, strings, template,
-    transform, Progress,
+    checksum, disasm, export, inspect, patch, script, search, signatures, stats, strings,
+    template, transform, Progress,
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -150,6 +150,24 @@ impl Server {
                         doc.undo();
                         Ok(json!({ "undone": ok, "length": doc.len() }).to_string())
                     }
+                    "session_script" => {
+                        let src = resolve_script(args)?;
+                        let len = args
+                            .get("length")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(doc.len().saturating_sub(off));
+                        let mut data = doc.read_range(off, len as usize);
+                        let ctx = script::ScriptCtx {
+                            cursor: off,
+                            sel_start: -1,
+                            sel_len: 0,
+                            doc_len: doc.len(),
+                            scope_offset: off,
+                        };
+                        let r = script::run_with_ctx(&src, &mut data, ctx)?;
+                        doc.replace(off, len, &data);
+                        Ok(script_result_json(&r, true).to_string())
+                    }
                     "session_save" => {
                         let dest = args.get("path").and_then(|p| p.as_str()).map(String::from);
                         let target = dest.or_else(|| {
@@ -208,6 +226,34 @@ impl Server {
                 doc.save_to(path).map_err(|e| format!("save failed: {e}"))?;
                 Ok(json!({ "records": writes.len() }).to_string())
             }
+            "script" => {
+                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let src = resolve_script(args)?;
+                let mut doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let len = args
+                    .get("length")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(doc.len().saturating_sub(off));
+                let mut data = doc.read_range(off, len as usize);
+                let ctx = script::ScriptCtx {
+                    cursor: off,
+                    sel_start: -1,
+                    sel_len: 0,
+                    doc_len: doc.len(),
+                    scope_offset: off,
+                };
+                let r = script::run_with_ctx(&src, &mut data, ctx)?;
+                let changed = data.len() as u64 != len || {
+                    let cur = doc.read_range(off, data.len());
+                    cur != data
+                };
+                if changed {
+                    doc.replace(off, len, &data);
+                    doc.save_to(path).map_err(|e| format!("save failed: {e}"))?;
+                }
+                Ok(script_result_json(&r, changed).to_string())
+            }
             _ => call_tool(name, args),
         }
     }
@@ -217,6 +263,32 @@ fn session_id(args: &Value) -> Result<u64, String> {
     args.get("session")
         .and_then(|v| v.as_u64())
         .ok_or_else(|| "missing 'session'".to_string())
+}
+
+/// Resolve a script's source from `source`, or by `library` name (substring).
+fn resolve_script(args: &Value) -> Result<String, String> {
+    if let Some(s) = args.get("source").and_then(|v| v.as_str()) {
+        return Ok(s.to_string());
+    }
+    if let Some(name) = args.get("library").and_then(|v| v.as_str()) {
+        let key = name.to_lowercase();
+        return script::LIBRARY
+            .iter()
+            .find(|(n, _)| n.to_lowercase().contains(&key))
+            .map(|(_, s)| s.to_string())
+            .ok_or_else(|| format!("no library script matching '{name}'"));
+    }
+    Err("provide 'source' or 'library'".into())
+}
+
+fn script_result_json(r: &script::ScriptResult, saved: bool) -> Value {
+    json!({
+        "output": r.log,
+        "saved": saved,
+        "set_cursor": r.set_cursor,
+        "regions": r.regions.iter().map(|(s, l, lab)| json!({"start": s, "len": l, "label": lab})).collect::<Vec<_>>(),
+        "notes": r.notes.iter().map(|(o, l, t)| json!({"offset": o, "len": l, "text": t})).collect::<Vec<_>>(),
+    })
 }
 
 fn parse_hex_arg(args: &Value) -> Result<Vec<u8>, String> {
@@ -321,6 +393,11 @@ fn tools_list() -> Value {
             "original": {"type":"string"}, "modified": {"type":"string"}, "output": {"type":"string"} } }) },
         { "name": "patch_apply", "description": "Apply an IPS patch to a file and save.",
           "inputSchema": path_schema(json!({ "patch": {"type":"string","description":"path to .ips patch"} })) },
+        { "name": "script", "description": "Run a Rhai script over a file range and save (read/write/len/typed accessors/find/crc32/add_region/add_note/...).",
+          "inputSchema": path_schema(json!({
+            "source": {"type":"string","description":"Rhai source"},
+            "library": {"type":"string","description":"or a built-in library script name (substring)"},
+            "offset": {"type":"integer"}, "length": {"type":"integer"} })) },
         { "name": "open", "description": "Open a file as an editing session; returns a session id.",
           "inputSchema": path_schema(json!({})) },
         { "name": "session_read", "description": "Hex dump from an open session.",
@@ -337,6 +414,10 @@ fn tools_list() -> Value {
             "session": {"type":"integer"}, "offset": {"type":"integer"}, "length": {"type":"integer"} } }) },
         { "name": "session_undo", "description": "Undo the last edit in a session.",
           "inputSchema": json!({ "type":"object", "required":["session"], "properties": { "session": {"type":"integer"} } }) },
+        { "name": "session_script", "description": "Run a Rhai script over a session range.",
+          "inputSchema": json!({ "type":"object", "required":["session"], "properties": {
+            "session": {"type":"integer"}, "source": {"type":"string"}, "library": {"type":"string"},
+            "offset": {"type":"integer"}, "length": {"type":"integer"} } }) },
         { "name": "session_save", "description": "Save a session to disk (its path, or a given 'path').",
           "inputSchema": json!({ "type":"object", "required":["session"], "properties": {
             "session": {"type":"integer"}, "path": {"type":"string"} } }) },
@@ -687,6 +768,51 @@ mod tests {
             "params":{"name":"session_read","arguments":{"session": id}}
         })).unwrap();
         assert_eq!(resp["result"]["isError"], true);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn script_tool_runs_and_saves() {
+        let p = tmpfile(&[0x00, 0x0F, 0xF0, 0xFF]);
+        let mut s = Server::new();
+        // XOR every byte with 0xFF via inline source
+        let r = call(&mut s, "script", json!({
+            "path": p.to_str().unwrap(),
+            "source": "for i in 0..len() { write(i, read(i) ^ 0xFF); }",
+        }));
+        assert_eq!(r["saved"], true);
+        assert_eq!(std::fs::read(&p).unwrap(), vec![0xFF, 0xF0, 0x0F, 0x00]);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn script_tool_by_library_name_and_side_effects() {
+        let p = tmpfile(b"abcdef");
+        let mut s = Server::new();
+        // library lookup + a script that prints and adds a region
+        let r = call(&mut s, "script", json!({
+            "path": p.to_str().unwrap(),
+            "source": "print(\"len \" + len()); add_region(0, 3, \"head\");",
+        }));
+        assert!(r["output"].as_str().unwrap().contains("len 6"));
+        assert_eq!(r["regions"][0]["label"], "head");
+        // library by name
+        let r2 = call(&mut s, "script", json!({
+            "path": p.to_str().unwrap(), "library": "uppercase",
+        }));
+        assert_eq!(r2["saved"], true);
+        assert_eq!(std::fs::read(&p).unwrap(), b"ABCDEF");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn session_script_tool() {
+        let p = tmpfile(b"hello");
+        let mut s = Server::new();
+        let id = call(&mut s, "open", json!({"path": p.to_str().unwrap()}))["session"].as_u64().unwrap();
+        call(&mut s, "session_script", json!({"session": id, "library": "uppercase"}));
+        call(&mut s, "session_save", json!({"session": id}));
+        assert_eq!(std::fs::read(&p).unwrap(), b"HELLO");
         let _ = std::fs::remove_file(&p);
     }
 

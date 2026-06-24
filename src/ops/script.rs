@@ -10,6 +10,35 @@ use std::rc::Rc;
 
 use rhai::{Engine, EvalAltResult};
 
+/// Built-in reusable scripts: (display name, source).
+pub const LIBRARY: &[(&str, &str)] = &[
+    (
+        "XOR with 0xFF",
+        "// invert every byte\nfor i in 0..len() {\n    write(i, read(i) ^ 0xFF);\n}\n",
+    ),
+    (
+        "ROT13 (ASCII letters)",
+        "for i in 0..len() {\n    let c = read(i);\n    if c >= 0x41 && c <= 0x5A { write(i, 0x41 + (c - 0x41 + 13) % 26); }\n    else if c >= 0x61 && c <= 0x7A { write(i, 0x61 + (c - 0x61 + 13) % 26); }\n}\n",
+    ),
+    (
+        "Reverse bytes",
+        "let n = len();\nfor i in 0..(n / 2) {\n    let a = read(i);\n    write(i, read(n - 1 - i));\n    write(n - 1 - i, a);\n}\n",
+    ),
+    ("Uppercase (ASCII)", "to_upper();\n"),
+    (
+        "Increment every byte",
+        "for i in 0..len() { write(i, read(i) + 1); }\n",
+    ),
+    (
+        "Report CRC-32 and size",
+        "print(\"size: \" + len());\nprint(\"crc32: \" + crc32());\n",
+    ),
+    (
+        "Annotate: fold the selection",
+        "// mark the selection as a region named 'blob'\nif sel_len() > 0 {\n    add_region(sel_start(), sel_len(), \"blob\");\n    print(\"folded \" + sel_len() + \" bytes\");\n}\n",
+    ),
+];
+
 /// Document context made available to a script (read-only).
 #[derive(Clone, Copy, Default)]
 pub struct ScriptCtx {
@@ -457,6 +486,18 @@ mod tests {
         // CRC32 of "Hello" = 0xF7D18982 = 4157704578
         assert_eq!(lines[0], "4157704578");
         assert_ne!(lines[0], lines[1]); // changed after lowercasing
+    }
+
+    #[test]
+    fn library_scripts_all_run() {
+        for (name, src) in LIBRARY {
+            let mut data = b"Hello, World! 12345".to_vec();
+            let ctx = ScriptCtx { sel_start: 0, sel_len: 4, doc_len: data.len() as u64, ..Default::default() };
+            assert!(
+                run_with_ctx(src, &mut data, ctx).is_ok(),
+                "library script '{name}' failed to run"
+            );
+        }
     }
 
     #[test]
