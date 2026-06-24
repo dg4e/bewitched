@@ -39,7 +39,32 @@ pub fn is_elevated() -> bool {
         }
         unsafe { geteuid() == 0 }
     }
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows_sys::Win32::Security::{
+            GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+        };
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        unsafe {
+            let mut token: HANDLE = core::ptr::null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return false;
+            }
+            let mut elevation: TOKEN_ELEVATION = core::mem::zeroed();
+            let mut ret_len = 0u32;
+            let ok = GetTokenInformation(
+                token,
+                TokenElevation,
+                &mut elevation as *mut _ as *mut core::ffi::c_void,
+                core::mem::size_of::<TOKEN_ELEVATION>() as u32,
+                &mut ret_len,
+            );
+            CloseHandle(token);
+            ok != 0 && elevation.TokenIsElevated != 0
+        }
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         false
     }
@@ -278,8 +303,172 @@ mod imp {
     }
 }
 
+// =============================== Windows ===================================
+#[cfg(target_os = "windows")]
+mod imp {
+    use super::*;
+    use core::ffi::c_void;
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE, HANDLE};
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        ReadProcessMemory, WriteProcessMemory,
+    };
+    use windows_sys::Win32::System::Memory::{
+        VirtualQueryEx, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_EXECUTE, PAGE_EXECUTE_READ,
+        PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_READONLY, PAGE_READWRITE,
+        PAGE_WRITECOPY,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION,
+        PROCESS_VM_READ, PROCESS_VM_WRITE,
+    };
+
+    pub struct ProcessHandle {
+        handle: HANDLE,
+        own: bool,
+    }
+
+    // A process HANDLE is a kernel handle valid across our threads.
+    unsafe impl Send for ProcessHandle {}
+    unsafe impl Sync for ProcessHandle {}
+
+    impl ProcessHandle {
+        pub fn open_self() -> io::Result<Self> {
+            Ok(Self {
+                handle: unsafe { GetCurrentProcess() },
+                own: true,
+            })
+        }
+
+        pub fn open(pid: u32) -> io::Result<Self> {
+            if pid == super::own_pid() {
+                return Self::open_self();
+            }
+            let access =
+                PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION;
+            let handle = unsafe { OpenProcess(access, FALSE, pid) };
+            if handle.is_null() {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "OpenProcess({pid}) failed — administrator required. {}",
+                        super::privilege_note()
+                    ),
+                ));
+            }
+            Ok(Self { handle, own: false })
+        }
+
+        pub fn read(&self, addr: u64, buf: &mut [u8]) -> io::Result<usize> {
+            if buf.is_empty() {
+                return Ok(0);
+            }
+            let mut read: usize = 0;
+            let ok = unsafe {
+                ReadProcessMemory(
+                    self.handle,
+                    addr as *const c_void,
+                    buf.as_mut_ptr() as *mut c_void,
+                    buf.len(),
+                    &mut read,
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(read)
+        }
+
+        pub fn write(&self, addr: u64, data: &[u8]) -> io::Result<usize> {
+            if data.is_empty() {
+                return Ok(0);
+            }
+            let mut wrote: usize = 0;
+            let ok = unsafe {
+                WriteProcessMemory(
+                    self.handle,
+                    addr as *mut c_void,
+                    data.as_ptr() as *const c_void,
+                    data.len(),
+                    &mut wrote,
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(wrote)
+        }
+
+        pub fn regions(&self) -> io::Result<Vec<MemRegion>> {
+            let mut out = Vec::new();
+            let mut addr: u64 = 0;
+            loop {
+                let mut mbi: MEMORY_BASIC_INFORMATION = unsafe { core::mem::zeroed() };
+                let got = unsafe {
+                    VirtualQueryEx(
+                        self.handle,
+                        addr as *const c_void,
+                        &mut mbi,
+                        core::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+                    )
+                };
+                if got == 0 {
+                    break;
+                }
+                let base = mbi.BaseAddress as u64;
+                let size = mbi.RegionSize as u64;
+                if mbi.State == MEM_COMMIT {
+                    let p = mbi.Protect;
+                    let readable = matches!(
+                        p,
+                        PAGE_READONLY
+                            | PAGE_READWRITE
+                            | PAGE_WRITECOPY
+                            | PAGE_EXECUTE_READ
+                            | PAGE_EXECUTE_READWRITE
+                            | PAGE_EXECUTE_WRITECOPY
+                    );
+                    let writable = matches!(
+                        p,
+                        PAGE_READWRITE
+                            | PAGE_WRITECOPY
+                            | PAGE_EXECUTE_READWRITE
+                            | PAGE_EXECUTE_WRITECOPY
+                    );
+                    let executable = matches!(
+                        p,
+                        PAGE_EXECUTE
+                            | PAGE_EXECUTE_READ
+                            | PAGE_EXECUTE_READWRITE
+                            | PAGE_EXECUTE_WRITECOPY
+                    );
+                    out.push(MemRegion {
+                        base,
+                        size,
+                        readable,
+                        writable,
+                        executable,
+                    });
+                }
+                addr = base.saturating_add(size);
+                if size == 0 || out.len() > 1_000_000 {
+                    break;
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    impl Drop for ProcessHandle {
+        fn drop(&mut self) {
+            if !self.own && !self.handle.is_null() {
+                unsafe { CloseHandle(self.handle) };
+            }
+        }
+    }
+}
+
 // ============================ other platforms ==============================
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod imp {
     use super::*;
 
