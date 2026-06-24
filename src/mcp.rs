@@ -1,0 +1,454 @@
+//! Model Context Protocol (MCP) server.
+//!
+//! Exposes ganghex's analysis engine as MCP tools so an LLM/agent can inspect
+//! binaries: read bytes, search, compute digests, gather statistics, extract
+//! strings, scan signatures, disassemble (14 architectures), inspect typed
+//! values at an offset, export, and apply binary templates.
+//!
+//! Transport is the standard MCP stdio transport: newline-delimited JSON-RPC 2.0
+//! on stdin/stdout. Run with `ganghex --mcp`.
+
+use std::io::{BufRead, Write};
+
+use serde_json::{json, Value};
+
+use crate::data::Document;
+use crate::ops::{checksum, disasm, export, inspect, search, signatures, stats, strings, template, Progress};
+
+const PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// Run the MCP server loop over stdin/stdout until EOF.
+pub fn serve() -> std::io::Result<()> {
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let req: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(e) => {
+                let err = error_response(&Value::Null, -32700, &format!("parse error: {e}"));
+                writeln!(out, "{err}")?;
+                out.flush()?;
+                continue;
+            }
+        };
+        if let Some(resp) = handle(&req) {
+            writeln!(out, "{resp}")?;
+            out.flush()?;
+        }
+    }
+    Ok(())
+}
+
+/// Handle one JSON-RPC request, returning a response (or `None` for notifications).
+pub fn handle(req: &Value) -> Option<Value> {
+    let id = req.get("id").cloned().unwrap_or(Value::Null);
+    let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+
+    // Notifications (no id) get no response.
+    req.get("id")?;
+
+    match method {
+        "initialize" => Some(result_response(
+            &id,
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "ganghex", "version": env!("CARGO_PKG_VERSION") }
+            }),
+        )),
+        "ping" => Some(result_response(&id, json!({}))),
+        "tools/list" => Some(result_response(&id, json!({ "tools": tools_list() }))),
+        "tools/call" => {
+            let params = req.get("params").cloned().unwrap_or(Value::Null);
+            let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let args = params.get("arguments").cloned().unwrap_or(json!({}));
+            match call_tool(name, &args) {
+                Ok(text) => Some(result_response(
+                    &id,
+                    json!({ "content": [ { "type": "text", "text": text } ] }),
+                )),
+                Err(e) => Some(result_response(
+                    &id,
+                    json!({ "content": [ { "type": "text", "text": e } ], "isError": true }),
+                )),
+            }
+        }
+        _ => Some(error_response(&id, -32601, &format!("method not found: {method}"))),
+    }
+}
+
+fn result_response(id: &Value, result: Value) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
+fn error_response(id: &Value, code: i64, message: &str) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+}
+
+// ---- tool definitions ----
+
+fn path_schema(extra: Value) -> Value {
+    let mut props = json!({ "path": { "type": "string", "description": "file or device path" } });
+    if let (Some(p), Some(e)) = (props.as_object_mut(), extra.as_object()) {
+        for (k, v) in e {
+            p.insert(k.clone(), v.clone());
+        }
+    }
+    json!({ "type": "object", "required": ["path"], "properties": props })
+}
+
+fn tools_list() -> Value {
+    json!([
+        { "name": "read_hex", "description": "Hex dump of a byte range.",
+          "inputSchema": path_schema(json!({
+            "offset": {"type":"integer","description":"start offset (default 0)"},
+            "length": {"type":"integer","description":"bytes to read (default 256)"} })) },
+        { "name": "checksums", "description": "Compute checksums/CRCs/digests over a range.",
+          "inputSchema": path_schema(json!({
+            "algorithms": {"type":"array","items":{"type":"string"},"description":"e.g. md5, sha256, crc32 (default common set)"},
+            "offset": {"type":"integer"}, "length": {"type":"integer"} })) },
+        { "name": "statistics", "description": "Entropy, byte distribution summary and a data-type classification.",
+          "inputSchema": path_schema(json!({ "offset": {"type":"integer"}, "length": {"type":"integer"} })) },
+        { "name": "search", "description": "Find occurrences of a typed value; returns match offsets.",
+          "inputSchema": path_schema(json!({
+            "type": {"type":"string","description":"text|utf16|hex|i8|i16|i32|i64|f32|f64"},
+            "value": {"type":"string"},
+            "max": {"type":"integer","description":"max results (default 100)"} })) },
+        { "name": "strings", "description": "Extract ASCII/UTF-16 strings.",
+          "inputSchema": path_schema(json!({
+            "min_length": {"type":"integer","description":"default 4"},
+            "max": {"type":"integer","description":"default 200"} })) },
+        { "name": "signatures", "description": "Scan for embedded file formats, archives, executables and crypto constants (binwalk-style).",
+          "inputSchema": path_schema(json!({})) },
+        { "name": "disassemble", "description": "Disassemble instructions at an offset.",
+          "inputSchema": path_schema(json!({
+            "offset": {"type":"integer"},
+            "count": {"type":"integer","description":"instructions (default 32)"},
+            "arch": {"type":"string","description":"x86-16|x86-32|x86-64|arm|thumb|aarch64|mips-le|mips-be|powerpc|riscv32|riscv64|msp430|6502|sm83 (default x86-64)"} })) },
+        { "name": "inspect", "description": "Interpret the bytes at an offset as many data types.",
+          "inputSchema": path_schema(json!({
+            "offset": {"type":"integer"},
+            "big_endian": {"type":"boolean","description":"default false (little-endian)"} })) },
+        { "name": "export", "description": "Export a byte range to a source/text/hex format.",
+          "inputSchema": path_schema(json!({
+            "offset": {"type":"integer"}, "length": {"type":"integer"},
+            "format": {"type":"string","description":"format name, e.g. 'C source', 'Base64', 'Intel HEX'"} })) },
+        { "name": "apply_template", "description": "Parse a structure with a built-in or custom binary template.",
+          "inputSchema": path_schema(json!({
+            "builtin": {"type":"string","description":"BMP|PNG|ELF|WAV|GIF (case-insensitive substring)"},
+            "template": {"type":"string","description":"custom template DSL source (overrides builtin)"},
+            "offset": {"type":"integer"} })) },
+    ])
+}
+
+// ---- tool dispatch ----
+
+fn call_tool(name: &str, args: &Value) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|p| p.as_str())
+        .ok_or("missing 'path'")?;
+    let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+    let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+    let total = doc.len();
+
+    match name {
+        "read_hex" => {
+            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(256);
+            Ok(export::export(&doc, off, len, export::Format::PlainHexDump))
+        }
+        "checksums" => {
+            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
+            let algos = parse_algos(args.get("algorithms"));
+            let results = checksum::compute(&doc, off, len, &algos, &Progress::default());
+            let map: serde_json::Map<String, Value> = results
+                .into_iter()
+                .map(|(a, v)| (a.name().to_string(), Value::String(v)))
+                .collect();
+            Ok(Value::Object(map).to_string())
+        }
+        "statistics" => {
+            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
+            let s = stats::analyze(&doc, off, len, &Progress::default());
+            let mc = s.most_common().map(|(b, c)| json!({"byte": b, "count": c}));
+            Ok(json!({
+                "total": s.total,
+                "entropy_bits_per_byte": s.entropy,
+                "classification": s.classify(),
+                "most_common": mc
+            })
+            .to_string())
+        }
+        "search" => {
+            let ty = parse_datatype(args.get("type").and_then(|v| v.as_str()).unwrap_or("hex"))?;
+            let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+            let needle = search::needle_bytes(value, ty, search::Endian::Little, false)?;
+            let mut hits = Vec::new();
+            let mut from = 0u64;
+            while hits.len() < max {
+                match search::find(&doc, &needle, from, search::Direction::Forward, false) {
+                    Some(o) => {
+                        hits.push(o);
+                        from = o + 1;
+                    }
+                    None => break,
+                }
+            }
+            Ok(json!({ "matches": hits, "count": hits.len() }).to_string())
+        }
+        "strings" => {
+            let min = args.get("min_length").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
+            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+            let found = strings::extract(&doc, 0, total, min, max, &Progress::default());
+            let arr: Vec<Value> = found
+                .into_iter()
+                .map(|f| json!({"offset": f.offset, "kind": format!("{:?}", f.kind), "text": f.text}))
+                .collect();
+            Ok(json!({ "strings": arr }).to_string())
+        }
+        "signatures" => {
+            let hits = signatures::scan(&doc, 0, total, 1000, &Progress::default());
+            let arr: Vec<Value> = hits
+                .into_iter()
+                .map(|h| json!({"offset": h.offset, "category": h.category.label(), "name": h.name}))
+                .collect();
+            Ok(json!({ "signatures": arr }).to_string())
+        }
+        "disassemble" => {
+            let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(32) as usize;
+            let arch = parse_arch(args.get("arch").and_then(|v| v.as_str()).unwrap_or("x86-64"))?;
+            let ins = disasm::disassemble(&doc, off, count, arch);
+            let arr: Vec<Value> = ins
+                .into_iter()
+                .map(|i| {
+                    let bytes = i.bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("");
+                    json!({"offset": i.offset, "bytes": bytes, "text": i.text})
+                })
+                .collect();
+            Ok(json!({ "instructions": arr }).to_string())
+        }
+        "inspect" => {
+            let le = !args.get("big_endian").and_then(|v| v.as_bool()).unwrap_or(false);
+            let window = doc.read_range(off, 16);
+            let interps = inspect::inspect(&window, le);
+            let map: serde_json::Map<String, Value> = interps
+                .into_iter()
+                .map(|i| (i.label.to_string(), Value::String(i.value)))
+                .collect();
+            Ok(Value::Object(map).to_string())
+        }
+        "export" => {
+            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
+            let fmt = parse_format(args.get("format").and_then(|v| v.as_str()).unwrap_or("Hex dump (plain text)"))?;
+            Ok(export::export(&doc, off, len, fmt))
+        }
+        "apply_template" => {
+            let src = if let Some(s) = args.get("template").and_then(|v| v.as_str()) {
+                s.to_string()
+            } else {
+                let key = args.get("builtin").and_then(|v| v.as_str()).unwrap_or("PNG").to_lowercase();
+                template::BUILTINS
+                    .iter()
+                    .find(|(n, _)| n.to_lowercase().contains(&key))
+                    .map(|(_, s)| s.to_string())
+                    .ok_or_else(|| format!("no built-in template matching '{key}'"))?
+            };
+            let tmpl = template::Template::parse(&src)?;
+            let fields = template::apply(&tmpl, &doc, off)?;
+            let arr: Vec<Value> = fields
+                .into_iter()
+                .map(|f| json!({"name": f.name, "offset": f.offset, "size": f.size, "type": f.kind, "value": f.value}))
+                .collect();
+            Ok(json!({ "fields": arr }).to_string())
+        }
+        _ => Err(format!("unknown tool: {name}")),
+    }
+}
+
+fn parse_algos(v: Option<&Value>) -> Vec<checksum::Algo> {
+    let default = vec![
+        checksum::Algo::Crc32,
+        checksum::Algo::Md5,
+        checksum::Algo::Sha1,
+        checksum::Algo::Sha256,
+    ];
+    let Some(arr) = v.and_then(|x| x.as_array()) else {
+        return default;
+    };
+    let mut out = Vec::new();
+    for item in arr {
+        if let Some(name) = item.as_str() {
+            let n = name.to_lowercase().replace(['-', '_', '/'], "");
+            for a in checksum::Algo::ALL {
+                if a.name().to_lowercase().replace(['-', '_', '/'], "").contains(&n) {
+                    out.push(*a);
+                    break;
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        default
+    } else {
+        out
+    }
+}
+
+fn parse_datatype(s: &str) -> Result<search::DataType, String> {
+    use search::DataType::*;
+    Ok(match s.to_lowercase().as_str() {
+        "text" | "ascii" => Text,
+        "utf16" | "unicode" => Utf16,
+        "hex" => Hex,
+        "i8" | "int8" => I8,
+        "i16" | "int16" => I16,
+        "i32" | "int32" => I32,
+        "i64" | "int64" => I64,
+        "f32" | "float" | "float32" => F32,
+        "f64" | "double" | "float64" => F64,
+        other => return Err(format!("unknown data type: {other}")),
+    })
+}
+
+fn parse_arch(s: &str) -> Result<disasm::Arch, String> {
+    use disasm::Arch::*;
+    Ok(match s.to_lowercase().replace(['_', ' '], "-").as_str() {
+        "x86-16" | "x86_16" | "16" => X86_16,
+        "x86-32" | "x86" | "32" => X86_32,
+        "x86-64" | "x64" | "amd64" | "64" => X86_64,
+        "arm" | "arm32" | "a32" => Arm,
+        "thumb" | "arm-thumb" => ArmThumb,
+        "aarch64" | "arm64" | "a64" => Aarch64,
+        "mips-le" | "mipsle" | "mips" => MipsLe,
+        "mips-be" | "mipsbe" => MipsBe,
+        "powerpc" | "ppc" => PowerPc,
+        "riscv32" | "riscv-32" | "rv32" => RiscV32,
+        "riscv64" | "riscv-64" | "rv64" | "riscv" => RiscV64,
+        "msp430" => Msp430,
+        "6502" => M6502,
+        "sm83" | "gameboy" | "gb" => Sm83,
+        other => return Err(format!("unknown arch: {other}")),
+    })
+}
+
+fn parse_format(s: &str) -> Result<export::Format, String> {
+    let n = s.to_lowercase();
+    export::Format::ALL
+        .iter()
+        .find(|f| f.name().to_lowercase() == n || f.extension() == n)
+        .copied()
+        .or_else(|| {
+            export::Format::ALL
+                .iter()
+                .find(|f| f.name().to_lowercase().contains(&n))
+                .copied()
+        })
+        .ok_or_else(|| format!("unknown export format: {s}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmpfile(bytes: &[u8]) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static C: AtomicU64 = AtomicU64::new(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "ganghex_mcp_{:?}_{}.bin",
+            std::thread::current().id(),
+            C.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    #[test]
+    fn initialize_advertises_server() {
+        let resp = handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize"})).unwrap();
+        assert_eq!(resp["result"]["serverInfo"]["name"], "ganghex");
+        assert_eq!(resp["result"]["protocolVersion"], PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn notifications_get_no_response() {
+        assert!(handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
+    }
+
+    #[test]
+    fn tools_list_nonempty() {
+        let resp = handle(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).unwrap();
+        let tools = resp["result"]["tools"].as_array().unwrap();
+        assert!(tools.len() >= 10);
+        assert!(tools.iter().any(|t| t["name"] == "disassemble"));
+    }
+
+    #[test]
+    fn unknown_method_errors() {
+        let resp = handle(&json!({"jsonrpc":"2.0","id":3,"method":"bogus"})).unwrap();
+        assert_eq!(resp["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn tools_call_checksums() {
+        let p = tmpfile(b"abc");
+        let resp = handle(&json!({
+            "jsonrpc":"2.0","id":4,"method":"tools/call",
+            "params": {"name":"checksums","arguments":{"path": p.to_str().unwrap(),"algorithms":["sha256","crc32"]}}
+        }))
+        .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let v: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(v["SHA-256"], "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(v["CRC-32"], "352441C2");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn tools_call_read_hex_and_disasm() {
+        let p = tmpfile(&[0x48, 0x31, 0xC0, 0x90, 0xC3]);
+        let hex = handle(&json!({
+            "jsonrpc":"2.0","id":5,"method":"tools/call",
+            "params":{"name":"read_hex","arguments":{"path": p.to_str().unwrap(),"length":5}}
+        })).unwrap();
+        assert!(hex["result"]["content"][0]["text"].as_str().unwrap().contains("48 31 C0"));
+
+        let dis = handle(&json!({
+            "jsonrpc":"2.0","id":6,"method":"tools/call",
+            "params":{"name":"disassemble","arguments":{"path": p.to_str().unwrap(),"arch":"x86-64","count":3}}
+        })).unwrap();
+        let text = dis["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("xor rax,rax"), "got {text}");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn tool_error_is_reported() {
+        let resp = handle(&json!({
+            "jsonrpc":"2.0","id":7,"method":"tools/call",
+            "params":{"name":"read_hex","arguments":{"path":"/nonexistent/xyz"}}
+        }))
+        .unwrap();
+        assert_eq!(resp["result"]["isError"], true);
+    }
+
+    #[test]
+    fn search_finds_bytes() {
+        let p = tmpfile(b"--needle--needle--");
+        let resp = handle(&json!({
+            "jsonrpc":"2.0","id":8,"method":"tools/call",
+            "params":{"name":"search","arguments":{"path": p.to_str().unwrap(),"type":"text","value":"needle"}}
+        }))
+        .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let v: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(v["matches"], json!([2, 10]));
+        let _ = std::fs::remove_file(&p);
+    }
+}

@@ -17,10 +17,18 @@ pub fn run() -> eframe::Result<()> {
             "--help" | "-h" => {
                 println!("ganghex — a fast, cross-platform hex editor");
                 println!("usage: ganghex [FILE|DEVICE]");
+                println!("       ganghex --mcp        run as an MCP (Model Context Protocol) server");
                 return Ok(());
             }
             "--version" | "-V" => {
                 println!("ganghex {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "--mcp" => {
+                // Headless MCP server over stdio; never opens a window.
+                if let Err(e) = crate::mcp::serve() {
+                    eprintln!("mcp server error: {e}");
+                }
                 return Ok(());
             }
             _ if !arg.starts_with('-') => startup = Some(PathBuf::from(arg)),

@@ -4,5 +4,6 @@
 //! the GUI (`ui`). The binary in `main.rs` is a thin shell around [`ui::run`].
 
 pub mod data;
+pub mod mcp;
 pub mod ops;
 pub mod ui;
