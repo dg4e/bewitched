@@ -64,6 +64,77 @@ pub fn run(src: &str, data: &mut Vec<u8>) -> Result<String, String> {
             b.borrow_mut().resize(n.max(0) as usize, v as u8)
         });
     }
+    {
+        let b = buf.clone();
+        engine.register_fn("insert", move |i: i64, v: i64| {
+            let mut bb = b.borrow_mut();
+            let idx = (i.max(0) as usize).min(bb.len());
+            bb.insert(idx, v as u8);
+        });
+    }
+    {
+        let b = buf.clone();
+        engine.register_fn("remove", move |i: i64, n: i64| {
+            let mut bb = b.borrow_mut();
+            let start = (i.max(0) as usize).min(bb.len());
+            let end = (start + n.max(0) as usize).min(bb.len());
+            bb.drain(start..end);
+        });
+    }
+    {
+        let b = buf.clone();
+        // index of byte `v` at or after `from`, or -1
+        engine.register_fn("find_byte", move |v: i64, from: i64| {
+            let bb = b.borrow();
+            let start = (from.max(0) as usize).min(bb.len());
+            bb[start..]
+                .iter()
+                .position(|&x| x == v as u8)
+                .map(|p| (p + start) as i64)
+                .unwrap_or(-1)
+        });
+    }
+    {
+        let b = buf.clone();
+        // index of the first occurrence of an ASCII substring, or -1
+        engine.register_fn("find_str", move |needle: &str| {
+            let bb = b.borrow();
+            let n = needle.as_bytes();
+            if n.is_empty() || n.len() > bb.len() {
+                return -1i64;
+            }
+            (0..=bb.len() - n.len())
+                .find(|&i| &bb[i..i + n.len()] == n)
+                .map(|i| i as i64)
+                .unwrap_or(-1)
+        });
+    }
+    {
+        let b = buf.clone();
+        engine.register_fn("count", move |v: i64| {
+            b.borrow().iter().filter(|&&x| x == v as u8).count() as i64
+        });
+    }
+    {
+        let b = buf.clone();
+        engine.register_fn("sum", move || {
+            b.borrow().iter().map(|&x| x as i64).sum::<i64>()
+        });
+    }
+    {
+        let b = buf.clone();
+        // hex dump of a range, for printing
+        engine.register_fn("hex", move |start: i64, len: i64| {
+            let bb = b.borrow();
+            let s = (start.max(0) as usize).min(bb.len());
+            let e = (s + len.max(0) as usize).min(bb.len());
+            bb[s..e]
+                .iter()
+                .map(|x| format!("{:02x}", x))
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+    }
 
     // ---- print capture ----
     {
@@ -156,6 +227,42 @@ mod tests {
         assert!(!err.is_empty());
         // buffer preserved on error
         assert_eq!(data, vec![0u8]);
+    }
+
+    #[test]
+    fn insert_and_remove() {
+        let mut data = vec![1u8, 2, 3];
+        run("insert(1, 9); remove(3, 1);", &mut data).unwrap();
+        // insert 9 at idx1 -> [1,9,2,3]; remove 1 at idx3 -> [1,9,2]
+        assert_eq!(data, vec![1, 9, 2]);
+    }
+
+    #[test]
+    fn find_and_count() {
+        let mut data = b"abcabc".to_vec();
+        let out = run(
+            r#"print(find_byte(0x62, 0)); print(find_str("cab")); print(count(0x61));"#,
+            &mut data,
+        )
+        .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines, vec!["1", "2", "2"]); // 'b'@1, "cab"@2, 'a' x2
+    }
+
+    #[test]
+    fn sum_and_hex() {
+        let mut data = vec![0x01, 0x02, 0xFF];
+        let out = run(r#"print(sum()); print(hex(0, 2));"#, &mut data).unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "258"); // 1+2+255
+        assert_eq!(lines[1], "01 02");
+    }
+
+    #[test]
+    fn find_missing_returns_minus_one() {
+        let mut data = vec![1u8, 2, 3];
+        let out = run(r#"print(find_byte(0x99, 0)); print(find_str("zzz"));"#, &mut data).unwrap();
+        assert_eq!(out.lines().collect::<Vec<_>>(), vec!["-1", "-1"]);
     }
 
     #[test]
