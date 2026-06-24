@@ -1615,10 +1615,10 @@ impl App {
             .resizable(true)
             .default_width(460.0)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Mode:");
-                    for b in [disasm::Bits::Bits16, disasm::Bits::Bits32, disasm::Bits::Bits64] {
-                        ui.selectable_value(&mut self.disasm.bits, b, b.label());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Arch:");
+                    for a in disasm::Arch::ALL {
+                        ui.selectable_value(&mut self.disasm.arch, *a, a.label());
                     }
                 });
                 ui.label(
@@ -1626,7 +1626,7 @@ impl App {
                         .color(theme::ADDR),
                 );
                 ui.separator();
-                let ins = disasm::disassemble(&self.doc, self.cursor, 64, self.disasm.bits);
+                let ins = disasm::disassemble(&self.doc, self.cursor, 64, self.disasm.arch);
                 egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                     egui::Grid::new("disasm_grid").num_columns(3).striped(true).show(ui, |ui| {
                         for i in &ins {

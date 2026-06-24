@@ -199,14 +199,14 @@ impl Default for TemplateState {
 
 struct DisasmState {
     open: bool,
-    bits: disasm::Bits,
+    arch: disasm::Arch,
 }
 
 impl Default for DisasmState {
     fn default() -> Self {
         Self {
             open: false,
-            bits: disasm::Bits::Bits64,
+            arch: disasm::Arch::X86_64,
         }
     }
 }
