@@ -18,6 +18,9 @@ pub enum Arch {
     PowerPc,
     RiscV32,
     RiscV64,
+    Msp430,
+    M6502,
+    Sm83,
 }
 
 impl Arch {
@@ -33,6 +36,9 @@ impl Arch {
         Arch::PowerPc,
         Arch::RiscV32,
         Arch::RiscV64,
+        Arch::Msp430,
+        Arch::M6502,
+        Arch::Sm83,
     ];
 
     pub fn label(self) -> &'static str {
@@ -48,6 +54,9 @@ impl Arch {
             Arch::PowerPc => "PowerPC",
             Arch::RiscV32 => "RISC-V 32",
             Arch::RiscV64 => "RISC-V 64",
+            Arch::Msp430 => "MSP430",
+            Arch::M6502 => "6502",
+            Arch::Sm83 => "SM83 (Game Boy)",
         }
     }
 
@@ -88,6 +97,9 @@ pub fn disassemble(reader: &dyn ByteReader, offset: u64, count: usize, arch: Arc
         Arch::PowerPc => disasm_ppc(&code, offset, count),
         Arch::RiscV32 => disasm_riscv(&code, offset, count, raki::Isa::Rv32),
         Arch::RiscV64 => disasm_riscv(&code, offset, count, raki::Isa::Rv64),
+        Arch::Msp430 => disasm_msp430(&code, offset, count),
+        Arch::M6502 => disasm_6502(&code, offset, count),
+        Arch::Sm83 => disasm_sm83(&code, offset, count),
     }
 }
 
@@ -221,31 +233,89 @@ fn disasm_ppc(code: &[u8], base: u64, count: usize) -> Vec<Insn> {
     })
 }
 
-/// ARM Thumb (variable 2/4 bytes). The top 5 bits of the first halfword decide
-/// whether it is a 32-bit Thumb-2 instruction.
+/// ARM Thumb (variable 2/4 bytes). We feed up to 4 bytes and let the decoder
+/// report the true instruction length (16-bit vs 32-bit Thumb-2), which handles
+/// every Thumb-2 form correctly rather than relying on a first-halfword guess.
 fn disasm_thumb(code: &[u8], base: u64, count: usize) -> Vec<Insn> {
-    use yaxpeax_arch::{Decoder, U8Reader};
+    use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
     use yaxpeax_arm::armv7::InstDecoder;
     let decoder = InstDecoder::default_thumb();
     variable(code, base, count, move |rem| {
         if rem.len() < 2 {
             return None;
         }
-        let hw = u16::from_le_bytes([rem[0], rem[1]]);
-        let len = if (hw >> 11) >= 0x1d { 4 } else { 2 };
-        if rem.len() < len {
+        let max = 4.min(rem.len());
+        let mut reader = U8Reader::new(&rem[..max]);
+        match decoder.decode(&mut reader) {
+            Ok(inst) => {
+                let len = (inst.len().to_const() as usize).clamp(2, max);
+                Some((len, inst.to_string()))
+            }
+            Err(_) => Some((2, format!(".hword 0x{:04x}", u16::from_le_bytes([rem[0], rem[1]])))),
+        }
+    })
+}
+
+/// MSP430 (variable 2/4/6 bytes, little-endian words).
+fn disasm_msp430(code: &[u8], base: u64, count: usize) -> Vec<Insn> {
+    use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
+    use yaxpeax_msp430::InstDecoder;
+    let decoder = InstDecoder::default();
+    variable(code, base, count, move |rem| {
+        let max = 6.min(rem.len());
+        if max < 2 {
             return None;
         }
-        let mut reader = U8Reader::new(&rem[..len]);
-        let text = match decoder.decode(&mut reader) {
-            Ok(inst) => inst.to_string(),
-            Err(_) if len == 2 => format!(".hword 0x{:04x}", hw),
-            Err(_) => format!(
-                ".word 0x{:08x}",
-                u32::from_le_bytes([rem[0], rem[1], rem[2], rem[3]])
-            ),
-        };
-        Some((len, text))
+        let mut reader = U8Reader::new(&rem[..max]);
+        match decoder.decode(&mut reader) {
+            Ok(inst) => {
+                let len = (inst.len().to_const() as usize).clamp(2, max);
+                Some((len, inst.to_string()))
+            }
+            Err(_) => Some((2, format!(".word 0x{:04x}", u16::from_le_bytes([rem[0], rem[1]])))),
+        }
+    })
+}
+
+/// 6502 (variable 1/2/3 bytes).
+fn disasm_6502(code: &[u8], base: u64, count: usize) -> Vec<Insn> {
+    use yaxpeax_6502::InstDecoder;
+    use yaxpeax_arch_02::{Decoder, LengthedInstruction, U8Reader};
+    let decoder = InstDecoder;
+    variable(code, base, count, move |rem| {
+        let max = 3.min(rem.len());
+        if max == 0 {
+            return None;
+        }
+        let mut reader = U8Reader::new(&rem[..max]);
+        match decoder.decode(&mut reader) {
+            Ok(inst) => {
+                let len = (inst.len().to_const() as usize).clamp(1, max);
+                Some((len, inst.to_string()))
+            }
+            Err(_) => Some((1, format!(".byte 0x{:02x}", rem[0]))),
+        }
+    })
+}
+
+/// SM83 — the Game Boy / Game Boy Color CPU (variable 1/2/3 bytes).
+fn disasm_sm83(code: &[u8], base: u64, count: usize) -> Vec<Insn> {
+    use yaxpeax_arch_02::{Decoder, LengthedInstruction, U8Reader};
+    use yaxpeax_sm83::InstDecoder;
+    let decoder = InstDecoder::default();
+    variable(code, base, count, move |rem| {
+        let max = 3.min(rem.len());
+        if max == 0 {
+            return None;
+        }
+        let mut reader = U8Reader::new(&rem[..max]);
+        match decoder.decode(&mut reader) {
+            Ok(inst) => {
+                let len = (inst.len().to_const() as usize).clamp(1, max);
+                Some((len, inst.to_string()))
+            }
+            Err(_) => Some((1, format!(".byte 0x{:02x}", rem[0]))),
+        }
     })
 }
 
@@ -391,6 +461,49 @@ mod tests {
         let ins = disassemble(&d, 0, 4, Arch::PowerPc);
         assert_eq!(ins.len(), 1);
         assert!(ins[0].text.contains("blr"), "got {:?}", ins[0].text);
+    }
+
+    #[test]
+    fn thumb2_32bit_instruction_length() {
+        // bl (Thumb-2) is a 32-bit instruction: F0 00 F8 00 form.
+        // bytes on disk: 00 F0 00 F8 -> first halfword 0xF000, top bits => 32-bit
+        let d = doc(&[0x00, 0xF0, 0x00, 0xF8, 0x70, 0x47]);
+        let ins = disassemble(&d, 0, 8, Arch::ArmThumb);
+        assert_eq!(ins[0].bytes.len(), 4, "got {:?}", ins[0]);
+        assert_eq!(ins[1].offset, 4); // next instruction follows the 32-bit one
+        assert_eq!(ins[1].bytes.len(), 2);
+    }
+
+    #[test]
+    fn msp430_decodes() {
+        // 0x4130 = ret (mov @sp+, pc) on MSP430; little-endian on disk: 30 41
+        let d = doc(&[0x30, 0x41]);
+        let ins = disassemble(&d, 0, 1, Arch::Msp430);
+        assert_eq!(ins.len(), 1);
+        assert!(!ins[0].text.is_empty());
+        assert!(!ins[0].text.starts_with(".word"), "got {:?}", ins[0].text);
+    }
+
+    #[test]
+    fn m6502_variable_length() {
+        // LDA #$01 (A9 01, 2 bytes) ; NOP (EA, 1 byte)
+        let d = doc(&[0xA9, 0x01, 0xEA]);
+        let ins = disassemble(&d, 0, 4, Arch::M6502);
+        assert_eq!(ins.len(), 2);
+        assert_eq!(ins[0].bytes.len(), 2);
+        assert_eq!(ins[1].offset, 2);
+        assert_eq!(ins[1].bytes.len(), 1);
+        assert!(ins[0].text.to_lowercase().contains("lda"), "got {:?}", ins[0].text);
+    }
+
+    #[test]
+    fn sm83_decodes() {
+        // 0x00 = nop ; 0xC9 = ret (Game Boy)
+        let d = doc(&[0x00, 0xC9]);
+        let ins = disassemble(&d, 0, 4, Arch::Sm83);
+        assert_eq!(ins.len(), 2);
+        assert!(!ins[0].text.is_empty());
+        assert!(!ins[1].text.is_empty());
     }
 
     #[test]

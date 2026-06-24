@@ -1378,10 +1378,13 @@ dependencies = [
  "rhai",
  "sha1",
  "sha2",
+ "yaxpeax-6502",
  "yaxpeax-arch 0.2.8",
  "yaxpeax-arch 0.3.2",
  "yaxpeax-arm",
  "yaxpeax-mips",
+ "yaxpeax-msp430",
+ "yaxpeax-sm83",
 ]
 
 [[package]]
@@ -4513,6 +4516,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
+name = "yaxpeax-6502"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e89d220a799f57094ad0a58c16b2c3b7730e8f1404665bee5f10e039e7c17c3"
+dependencies = [
+ "yaxpeax-arch 0.2.8",
+]
+
+[[package]]
 name = "yaxpeax-arch"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4552,6 +4564,25 @@ name = "yaxpeax-mips"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d83d243a75ff9312b78ef761596cf0bf3b625786176363d65e653a75042873a"
+dependencies = [
+ "num_enum 0.2.3",
+ "yaxpeax-arch 0.2.8",
+]
+
+[[package]]
+name = "yaxpeax-msp430"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "40c1711ed166c1082be771cf9beb6c24160b83691079704a8f59b6d9cb8bed36"
+dependencies = [
+ "yaxpeax-arch 0.3.2",
+]
+
+[[package]]
+name = "yaxpeax-sm83"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5175d9ee200f1a2b8773500c579608f89b898f4439dfa87b09b23d4143e8d2f0"
 dependencies = [
  "num_enum 0.2.3",
  "yaxpeax-arch 0.2.8",
