@@ -502,6 +502,54 @@ impl App {
         self.status = format!("{} cursor(s)", self.extra_cursors.len() + 1);
     }
 
+    /// Keep extra carets distinct, in range, and not coincident with the primary.
+    fn dedup_cursors(&mut self) {
+        let len = self.doc.len();
+        let cur = self.cursor.min(len);
+        self.cursor = cur;
+        self.extra_cursors.retain(|&c| c <= len && c != cur);
+        self.extra_cursors.sort_unstable();
+        self.extra_cursors.dedup();
+    }
+
+    /// Backspace at the primary and every extra caret (delete the byte before each).
+    fn multi_backspace(&mut self) {
+        let positions: Vec<u64> = std::iter::once(self.cursor)
+            .chain(self.extra_cursors.iter().copied())
+            .collect();
+        let mut dels: Vec<u64> = positions.iter().filter(|&&p| p > 0).map(|p| p - 1).collect();
+        dels.sort_unstable_by(|a, b| b.cmp(a)); // high to low
+        dels.dedup();
+        for d in dels {
+            self.doc.delete(d, 1);
+        }
+        let rebased = rebase_deletes_before(&positions);
+        self.cursor = rebased[0];
+        self.extra_cursors = rebased[1..].to_vec();
+        self.dedup_cursors();
+        self.nibble = 0;
+        self.scroll_to_cursor = true;
+    }
+
+    /// Delete-forward at the primary and every extra caret (delete the byte at each).
+    fn multi_delete_forward(&mut self) {
+        let len = self.doc.len();
+        let positions: Vec<u64> = std::iter::once(self.cursor)
+            .chain(self.extra_cursors.iter().copied())
+            .collect();
+        let mut dels: Vec<u64> = positions.iter().copied().filter(|&p| p < len).collect();
+        dels.sort_unstable_by(|a, b| b.cmp(a));
+        dels.dedup();
+        for d in dels {
+            self.doc.delete(d, 1);
+        }
+        let rebased = rebase_deletes_at(&positions);
+        self.cursor = rebased[0];
+        self.extra_cursors = rebased[1..].to_vec();
+        self.dedup_cursors();
+        self.scroll_to_cursor = true;
+    }
+
     /// Insert `bytes` at the primary cursor and every extra cursor, rebasing all
     /// carets afterwards. Applies high-offset-first so earlier offsets stay valid.
     fn multi_insert(&mut self, bytes: &[u8]) {
@@ -1208,6 +1256,10 @@ impl App {
         if self.delete_selection() {
             return;
         }
+        if !self.extra_cursors.is_empty() {
+            self.multi_backspace();
+            return;
+        }
         if self.cursor > 0 {
             self.doc.delete(self.cursor - 1, 1);
             self.cursor -= 1;
@@ -1218,6 +1270,10 @@ impl App {
 
     fn delete_forward(&mut self) {
         if self.delete_selection() {
+            return;
+        }
+        if !self.extra_cursors.is_empty() {
+            self.multi_delete_forward();
             return;
         }
         if self.cursor < self.doc.len() {
@@ -1405,6 +1461,33 @@ fn rebase_inserts(positions: &[u64], n: u64) -> Vec<u64> {
         .map(|&p| {
             let before = positions.iter().filter(|&&q| q < p).count() as u64;
             p + n * (before + 1)
+        })
+        .collect()
+}
+
+/// Backspace at each caret: a caret at `p` (>0) deletes the byte at `p-1` and
+/// lands at `p-1`, shifted left by every other backspace at a lower offset.
+fn rebase_deletes_before(positions: &[u64]) -> Vec<u64> {
+    positions
+        .iter()
+        .map(|&p| {
+            if p == 0 {
+                return 0;
+            }
+            let before = positions.iter().filter(|&&q| q > 0 && q < p).count() as u64;
+            p - 1 - before
+        })
+        .collect()
+}
+
+/// Delete-forward at each caret: a caret at `p` deletes the byte at `p` and stays
+/// at `p`, shifted left by every deletion at a lower offset.
+fn rebase_deletes_at(positions: &[u64]) -> Vec<u64> {
+    positions
+        .iter()
+        .map(|&p| {
+            let before = positions.iter().filter(|&&q| q < p).count() as u64;
+            p - before
         })
         .collect()
 }

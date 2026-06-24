@@ -2290,6 +2290,23 @@ mod ui_tests {
     }
 
     #[test]
+    fn rebase_deletes_before_carets() {
+        // backspace at 3 and 7 -> delete idx2,idx6 -> carets at 2 and 5
+        assert_eq!(rebase_deletes_before(&[3, 7]), vec![2, 5]);
+        // a caret at 0 cannot backspace and stays put
+        assert_eq!(rebase_deletes_before(&[0, 5]), vec![0, 4]);
+        assert_eq!(rebase_deletes_before(&[1]), vec![0]);
+    }
+
+    #[test]
+    fn rebase_deletes_at_carets() {
+        // delete-forward at 3 and 7 -> stay at 3, and 7 shifts left by one -> 6
+        assert_eq!(rebase_deletes_at(&[3, 7]), vec![3, 6]);
+        // adjacent carets collapse
+        assert_eq!(rebase_deletes_at(&[0, 1, 2]), vec![0, 0, 0]);
+    }
+
+    #[test]
     fn digit_of_keys() {
         assert_eq!(digit_of(egui::Key::Num0), Some(0));
         assert_eq!(digit_of(egui::Key::Num9), Some(9));
