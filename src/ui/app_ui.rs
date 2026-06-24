@@ -2277,6 +2277,19 @@ mod ui_tests {
     }
 
     #[test]
+    fn rebase_inserts_shifts_carets() {
+        // carets at 5 and 10, each inserts 1 byte
+        assert_eq!(rebase_inserts(&[5, 10], 1), vec![6, 12]);
+        // single caret: just advances by n
+        assert_eq!(rebase_inserts(&[3], 4), vec![7]);
+        // three carets inserting 2 bytes each: earlier insertions push later carets
+        // 0 -> 2 ; 4 shifted by +2 then +2 own -> 8 ; 8 shifted by +4 then +2 -> 14
+        assert_eq!(rebase_inserts(&[0, 4, 8], 2), vec![2, 8, 14]);
+        // order of input doesn't matter (positions are matched individually)
+        assert_eq!(rebase_inserts(&[10, 5], 1), vec![12, 6]);
+    }
+
+    #[test]
     fn digit_of_keys() {
         assert_eq!(digit_of(egui::Key::Num0), Some(0));
         assert_eq!(digit_of(egui::Key::Num9), Some(9));

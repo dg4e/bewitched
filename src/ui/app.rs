@@ -502,6 +502,25 @@ impl App {
         self.status = format!("{} cursor(s)", self.extra_cursors.len() + 1);
     }
 
+    /// Insert `bytes` at the primary cursor and every extra cursor, rebasing all
+    /// carets afterwards. Applies high-offset-first so earlier offsets stay valid.
+    fn multi_insert(&mut self, bytes: &[u8]) {
+        let mut positions: Vec<u64> = Vec::with_capacity(self.extra_cursors.len() + 1);
+        positions.push(self.cursor);
+        positions.extend_from_slice(&self.extra_cursors);
+
+        let mut order: Vec<usize> = (0..positions.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(positions[i]));
+        for &i in &order {
+            self.doc.insert(positions[i], bytes);
+        }
+        let rebased = rebase_inserts(&positions, bytes.len() as u64);
+        self.cursor = rebased[0];
+        self.extra_cursors = rebased[1..].to_vec();
+        self.nibble = 0;
+        self.scroll_to_cursor = true;
+    }
+
     /// Overwrite `bytes` at every extra cursor (overwrite mode only), advancing
     /// each. Offsets stay valid because overwrite does not change length.
     fn broadcast_overwrite(&mut self, bytes: &[u8]) {
@@ -1171,7 +1190,14 @@ impl App {
                 self.live_poke(self.cursor, byte);
                 self.broadcast_overwrite(&[byte]);
             }
-            EditMode::Insert => self.doc.insert(self.cursor, &[byte]),
+            EditMode::Insert => {
+                if self.extra_cursors.is_empty() {
+                    self.doc.insert(self.cursor, &[byte]);
+                } else {
+                    self.multi_insert(&[byte]);
+                    return;
+                }
+            }
         }
         self.cursor += 1;
         self.nibble = 0;
@@ -1223,10 +1249,13 @@ impl App {
         if write {
             self.doc.overwrite(self.cursor, &data);
             self.broadcast_overwrite(&data);
-        } else {
+            self.cursor += data.len() as u64;
+        } else if self.extra_cursors.is_empty() {
             self.doc.insert(self.cursor, &data);
+            self.cursor += data.len() as u64;
+        } else {
+            self.multi_insert(&data);
         }
-        self.cursor += data.len() as u64;
         self.scroll_to_cursor = true;
         self.status = format!("pasted {} bytes", data.len());
     }
@@ -1364,6 +1393,20 @@ fn open_in_default_app(path: &std::path::Path) -> std::io::Result<()> {
 
     cmd.arg(path);
     cmd.spawn().map(|_| ())
+}
+
+/// Given caret positions that each insert `n` bytes at their own offset,
+/// return where each caret ends up. A caret is shifted right by every insertion
+/// at a lower offset, plus `n` for its own insertion. Positions are assumed
+/// distinct.
+fn rebase_inserts(positions: &[u64], n: u64) -> Vec<u64> {
+    positions
+        .iter()
+        .map(|&p| {
+            let before = positions.iter().filter(|&&q| q < p).count() as u64;
+            p + n * (before + 1)
+        })
+        .collect()
 }
 
 fn human(n: u64) -> String {
