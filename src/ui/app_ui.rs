@@ -355,6 +355,14 @@ impl App {
                     .on_hover_text("editing writes through to process memory");
                     ui.separator();
                 }
+                if !self.extra_cursors.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!("{} cursors", self.extra_cursors.len() + 1))
+                            .color(theme::AMBER),
+                    )
+                    .on_hover_text("Ctrl/Cmd+click to add carets · Esc to clear");
+                    ui.separator();
+                }
                 ui.label(egui::RichText::new(&self.status).color(theme::status_color(&self.status)));
             });
         });
@@ -430,8 +438,13 @@ impl App {
                                             layout.col_to_byte(col as usize)
                                         {
                                             let off = (base + i as u64).min(len);
-                                            let extend = resp.dragged();
-                                            self.click_to(off, pane, nib, extend);
+                                            let ctrl = ui.input(|inp| inp.modifiers.command);
+                                            if ctrl && resp.clicked() {
+                                                self.toggle_extra_cursor(off);
+                                            } else {
+                                                let extend = resp.dragged();
+                                                self.click_to(off, pane, nib, extend);
+                                            }
                                         }
                                     }
                                 }
@@ -472,10 +485,17 @@ impl App {
         } else {
             None
         };
+        let extra: Vec<bool> = (0..self.bytes_per_row)
+            .map(|i| {
+                let off = base + i as u64;
+                self.extra_cursors.contains(&off)
+            })
+            .collect();
         let ctx = hexview::RowCtx {
             bytes: &bytes,
             modified: &modified,
             selected: &selected,
+            extra: &extra,
             base_addr: base,
             charset: self.charset,
             cursor,
@@ -619,7 +639,13 @@ impl App {
             Key::Insert => self.toggle_mode(),
             Key::Backspace => self.backspace(),
             Key::Delete => self.delete_forward(),
-            Key::Escape => self.clear_selection(),
+            Key::Escape => {
+                self.clear_selection();
+                if !self.extra_cursors.is_empty() {
+                    self.extra_cursors.clear();
+                    self.status = "cleared extra cursors".into();
+                }
+            }
             _ => {}
         }
     }

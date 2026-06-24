@@ -321,6 +321,8 @@ pub struct App {
     bookmarks: [Option<u64>; 10],
     clipboard: Vec<u8>,
     regions: Vec<Region>,
+    /// Additional carets for multi-cursor editing (overwrite mode).
+    extra_cursors: Vec<u64>,
     status: String,
     scroll_to_cursor: bool,
     page_rows: usize,
@@ -384,6 +386,7 @@ impl App {
             bookmarks: [None; 10],
             clipboard: Vec::new(),
             regions: Vec::new(),
+            extra_cursors: Vec::new(),
             status,
             scroll_to_cursor: false,
             page_rows: 16,
@@ -479,8 +482,42 @@ impl App {
         self.regions.clear();
         self.notes.clear();
         self.bookmarks = [None; 10];
+        self.extra_cursors.clear();
         self.process_target = None;
         self.scroll_to_cursor = true;
+    }
+
+    // ---- multi-cursor ----
+
+    fn toggle_extra_cursor(&mut self, off: u64) {
+        if off == self.cursor {
+            return;
+        }
+        if let Some(i) = self.extra_cursors.iter().position(|&c| c == off) {
+            self.extra_cursors.remove(i);
+        } else {
+            self.extra_cursors.push(off);
+            self.extra_cursors.sort_unstable();
+        }
+        self.status = format!("{} cursor(s)", self.extra_cursors.len() + 1);
+    }
+
+    /// Overwrite `bytes` at every extra cursor (overwrite mode only), advancing
+    /// each. Offsets stay valid because overwrite does not change length.
+    fn broadcast_overwrite(&mut self, bytes: &[u8]) {
+        if self.extra_cursors.is_empty() {
+            return;
+        }
+        let extras = self.extra_cursors.clone();
+        for &c in &extras {
+            self.doc.overwrite(c, bytes);
+            if let Some(meta) = &self.process_target {
+                let _ = meta.handle.write(meta.base + c, bytes);
+            }
+        }
+        for c in &mut self.extra_cursors {
+            *c += bytes.len() as u64;
+        }
     }
 
     // ---- annotations sidecar ----
@@ -1080,6 +1117,28 @@ impl App {
                 };
                 self.doc.overwrite(self.cursor, &[nb]);
                 self.live_poke(self.cursor, nb);
+                // Mirror the nibble edit to every extra cursor.
+                if !self.extra_cursors.is_empty() {
+                    let editing_low = self.nibble == 1;
+                    let extras = self.extra_cursors.clone();
+                    for &c in &extras {
+                        let cb = self.byte_at(c);
+                        let cnb = if editing_low {
+                            (cb & 0xf0) | d
+                        } else {
+                            (cb & 0x0f) | (d << 4)
+                        };
+                        self.doc.overwrite(c, &[cnb]);
+                        if let Some(meta) = &self.process_target {
+                            let _ = meta.handle.write(meta.base + c, &[cnb]);
+                        }
+                    }
+                    if editing_low {
+                        for c in &mut self.extra_cursors {
+                            *c += 1;
+                        }
+                    }
+                }
                 if self.nibble == 0 {
                     self.nibble = 1;
                 } else {
@@ -1110,6 +1169,7 @@ impl App {
             EditMode::Overwrite => {
                 self.doc.overwrite(self.cursor, &[byte]);
                 self.live_poke(self.cursor, byte);
+                self.broadcast_overwrite(&[byte]);
             }
             EditMode::Insert => self.doc.insert(self.cursor, &[byte]),
         }
@@ -1162,6 +1222,7 @@ impl App {
         let data = self.clipboard.clone();
         if write {
             self.doc.overwrite(self.cursor, &data);
+            self.broadcast_overwrite(&data);
         } else {
             self.doc.insert(self.cursor, &data);
         }

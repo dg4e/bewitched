@@ -111,6 +111,8 @@ pub struct RowCtx<'a> {
     pub bytes: &'a [Option<u8>],
     pub modified: &'a [bool],
     pub selected: &'a [bool],
+    /// Per-byte flag: an additional (multi-cursor) caret sits here.
+    pub extra: &'a [bool],
     pub base_addr: u64,
     pub charset: Charset,
     /// Active cursor cell in this row, if any: (byte_index, nibble, pane).
@@ -171,7 +173,14 @@ pub fn build_row(layout: &Layout, ctx: &RowCtx) -> LayoutJob {
                     let hi = HEXD[(b >> 4) as usize] as char;
                     let lo = HEXD[(b & 0xf) as usize] as char;
                     let cur = ctx.cursor.filter(|c| c.0 == i && c.2 == Pane::Hex);
-                    let selbg = if sel { theme::SEL_BG } else { Color32::TRANSPARENT };
+                    let extra = ctx.extra.get(i).copied().unwrap_or(false);
+                    let selbg = if sel {
+                        theme::SEL_BG
+                    } else if extra {
+                        theme::CURSOR_BG.gamma_multiply(0.45)
+                    } else {
+                        Color32::TRANSPARENT
+                    };
                     // high nibble
                     let (hc, hb) = nib_style(cur, 0, base, selbg, ctx.editing_pane);
                     job.append(&hi.to_string(), 0.0, fmt(font, hc, hb));
@@ -203,7 +212,14 @@ pub fn build_row(layout: &Layout, ctx: &RowCtx) -> LayoutJob {
                     } else {
                         byte_color(b, modi)
                     };
-                    let mut bg = if sel { theme::SEL_BG } else { Color32::TRANSPARENT };
+                    let extra = ctx.extra.get(i).copied().unwrap_or(false);
+                    let mut bg = if sel {
+                        theme::SEL_BG
+                    } else if extra {
+                        theme::CURSOR_BG.gamma_multiply(0.45)
+                    } else {
+                        Color32::TRANSPARENT
+                    };
                     if let Some((_, _, _)) = ctx.cursor.filter(|c| c.0 == i && c.2 == Pane::Text) {
                         if ctx.editing_pane == Pane::Text {
                             bg = theme::CURSOR_BG;
@@ -300,10 +316,12 @@ mod tests {
         let bytes: Vec<Option<u8>> = (0..16).map(|i| Some(i as u8)).collect();
         let modified = vec![false; 16];
         let selected = vec![false; 16];
+        let extra = vec![false; 16];
         let ctx = RowCtx {
             bytes: &bytes,
             modified: &modified,
             selected: &selected,
+            extra: &extra,
             base_addr: 0,
             charset: Charset::Ansi,
             cursor: Some((0, 0, Pane::Hex)),
