@@ -161,6 +161,8 @@ struct TemplateState {
     src: String,
     fields: Vec<template::Field>,
     status: String,
+    edit_idx: Option<usize>,
+    edit_buf: String,
 }
 
 impl Default for TemplateState {
@@ -171,6 +173,8 @@ impl Default for TemplateState {
             src: template::BUILTINS[0].1.to_string(),
             fields: Vec::new(),
             status: String::new(),
+            edit_idx: None,
+            edit_buf: String::new(),
         }
     }
 }
@@ -898,6 +902,26 @@ impl App {
                 self.template.status = e;
                 self.template.fields.clear();
             }
+        }
+    }
+
+    /// Encode the edit buffer and write it over the field at `idx`.
+    fn write_template_field(&mut self, idx: usize) {
+        let Some(f) = self.template.fields.get(idx).cloned() else {
+            return;
+        };
+        match template::encode(&f.edit, &self.template.edit_buf) {
+            Ok(bytes) => {
+                self.doc.overwrite(f.offset, &bytes);
+                if let Some(meta) = &self.process_target {
+                    let _ = meta.handle.write(meta.base + f.offset, &bytes);
+                }
+                self.template.status = format!("wrote {} ({} bytes)", f.name, bytes.len());
+                self.template.edit_idx = None;
+                self.scroll_to_cursor = true;
+                self.apply_template(); // refresh values
+            }
+            Err(e) => self.template.status = format!("{}: {e}", f.name),
         }
     }
 

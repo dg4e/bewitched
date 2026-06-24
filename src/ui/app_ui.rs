@@ -71,7 +71,10 @@ impl App {
                             .color(theme::GREEN_DIM),
                     );
                 });
-                if ui.button("Open process memory…").clicked() {
+                if ui
+                    .button("Open process memory…  (root/admin for other PIDs)")
+                    .clicked()
+                {
                     self.process_ui.open = true;
                     ui.close_menu();
                 }
@@ -1676,15 +1679,42 @@ impl App {
                 if !self.template.status.is_empty() {
                     ui.label(egui::RichText::new(&self.template.status).color(theme::status_color(&self.template.status)));
                 }
+                // Inline editor for the selected field.
+                let mut do_write = false;
+                if let Some(idx) = self.template.edit_idx {
+                    if let Some(f) = self.template.fields.get(idx) {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("edit {} ({}):", f.name, f.kind))
+                                    .color(theme::AMBER),
+                            );
+                            let resp = ui.add(
+                                egui::TextEdit::singleline(&mut self.template.edit_buf)
+                                    .desired_width(160.0),
+                            );
+                            if ui.button("Write").clicked()
+                                || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                            {
+                                do_write = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.template.edit_idx = None;
+                            }
+                        });
+                    }
+                }
                 ui.separator();
+                let mut start_edit: Option<(usize, String)> = None;
                 egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
-                    egui::Grid::new("tmpl_grid").num_columns(4).striped(true).show(ui, |ui| {
+                    egui::Grid::new("tmpl_grid").num_columns(5).striped(true).show(ui, |ui| {
                         ui.label(egui::RichText::new("offset").color(theme::ADDR));
                         ui.label(egui::RichText::new("field").color(theme::ADDR));
                         ui.label(egui::RichText::new("type").color(theme::ADDR));
                         ui.label(egui::RichText::new("value").color(theme::ADDR));
+                        ui.label("");
                         ui.end_row();
-                        for f in &self.template.fields {
+                        for (i, f) in self.template.fields.iter().enumerate() {
                             if ui
                                 .add(egui::Label::new(
                                     egui::RichText::new(format!("{:#010X}", f.offset))
@@ -1697,10 +1727,26 @@ impl App {
                             ui.label(egui::RichText::new(&f.name).color(theme::GREEN));
                             ui.label(egui::RichText::new(&f.kind).color(theme::GREEN_DIM));
                             ui.label(egui::RichText::new(&f.value).monospace());
+                            if f.edit != template::EditKind::None {
+                                if ui.small_button("edit").clicked() {
+                                    start_edit = Some((i, f.value.clone()));
+                                }
+                            } else {
+                                ui.label("");
+                            }
                             ui.end_row();
                         }
                     });
                 });
+                if let Some((i, val)) = start_edit {
+                    self.template.edit_idx = Some(i);
+                    self.template.edit_buf = val;
+                }
+                if do_write {
+                    if let Some(idx) = self.template.edit_idx {
+                        self.write_template_field(idx);
+                    }
+                }
             });
         if let Some(off) = jump {
             self.set_cursor(off, false);

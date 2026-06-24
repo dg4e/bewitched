@@ -81,6 +81,21 @@ pub struct Template {
     stmts: Vec<Stmt>,
 }
 
+/// How an edited field value is encoded back to bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EditKind {
+    /// Unsigned integer of `width` bytes, little-endian if true.
+    Uint(usize, bool),
+    /// Signed integer of `width` bytes.
+    Sint(usize, bool),
+    F32(bool),
+    F64(bool),
+    Ascii,
+    Hex,
+    /// Not editable (e.g. a magic marker).
+    None,
+}
+
 /// A parsed field produced by applying a template.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Field {
@@ -89,6 +104,71 @@ pub struct Field {
     pub size: u64,
     pub kind: String,
     pub value: String,
+    pub edit: EditKind,
+}
+
+fn parse_int_lit(s: &str) -> Option<i128> {
+    let s = s.trim();
+    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        i128::from_str_radix(h, 16).ok()
+    } else {
+        s.parse::<i128>().ok()
+    }
+}
+
+/// Encode an edited field value back into bytes per its [`EditKind`].
+pub fn encode(kind: &EditKind, input: &str) -> Result<Vec<u8>, String> {
+    let pack = |v: u128, w: usize, le: bool| -> Vec<u8> {
+        let le_bytes = v.to_le_bytes();
+        if le {
+            le_bytes[..w].to_vec()
+        } else {
+            le_bytes[..w].iter().rev().copied().collect()
+        }
+    };
+    match kind {
+        EditKind::Uint(w, le) => {
+            let n = parse_int_lit(input).ok_or("invalid integer")?;
+            if n < 0 {
+                return Err("value is negative".into());
+            }
+            let n = n as u128;
+            if *w < 16 && n >= (1u128 << (w * 8)) {
+                return Err(format!("value too large for {w} byte(s)"));
+            }
+            Ok(pack(n, *w, *le))
+        }
+        EditKind::Sint(w, le) => {
+            let n = parse_int_lit(input).ok_or("invalid integer")?;
+            let bits = (*w * 8) as u32;
+            let min = -(1i128 << (bits - 1));
+            let max = (1i128 << (bits - 1)) - 1;
+            if n < min || n > max {
+                return Err(format!("value out of range for i{bits}"));
+            }
+            // two's complement: low `bits` of the wrapped unsigned value
+            let mask = (1u128 << bits) - 1;
+            Ok(pack((n as u128) & mask, *w, *le))
+        }
+        EditKind::F32(le) => {
+            let f: f32 = input.trim().parse().map_err(|_| "invalid float")?;
+            let b = f.to_le_bytes();
+            Ok(if *le { b.to_vec() } else { b.iter().rev().copied().collect() })
+        }
+        EditKind::F64(le) => {
+            let f: f64 = input.trim().parse().map_err(|_| "invalid float")?;
+            let b = f.to_le_bytes();
+            Ok(if *le { b.to_vec() } else { b.iter().rev().copied().collect() })
+        }
+        EditKind::Ascii => Ok(input.as_bytes().to_vec()),
+        EditKind::Hex => crate::ops::search::needle_bytes(
+            input,
+            crate::ops::search::DataType::Hex,
+            crate::ops::search::Endian::Little,
+            false,
+        ),
+        EditKind::None => Err("field is not editable".into()),
+    }
 }
 
 fn parse_count(tok: &str) -> Count {
@@ -221,6 +301,7 @@ pub fn apply(tmpl: &Template, reader: &dyn ByteReader, start: u64) -> Result<Vec
                     size: m.len() as u64,
                     kind: "magic".into(),
                     value: String::from_utf8_lossy(m).into_owned(),
+                    edit: EditKind::None,
                 });
                 pos += m.len() as u64;
             }
@@ -251,12 +332,19 @@ pub fn apply(tmpl: &Template, reader: &dyn ByteReader, start: u64) -> Result<Vec
                 if let Some(u) = store {
                     vals.insert(name.clone(), u);
                 }
+                let edit = match ty {
+                    NumTy::U8 | NumTy::U16 | NumTy::U32 | NumTy::U64 => EditKind::Uint(w, le),
+                    NumTy::I8 | NumTy::I16 | NumTy::I32 | NumTy::I64 => EditKind::Sint(w, le),
+                    NumTy::F32 => EditKind::F32(le),
+                    NumTy::F64 => EditKind::F64(le),
+                };
                 fields.push(Field {
                     name: name.clone(),
                     offset: pos,
                     size: w as u64,
                     kind: format!("{:?}", ty).to_lowercase(),
                     value,
+                    edit,
                 });
                 pos += w as u64;
             }
@@ -272,6 +360,7 @@ pub fn apply(tmpl: &Template, reader: &dyn ByteReader, start: u64) -> Result<Vec
                     size: n as u64,
                     kind: "ascii".into(),
                     value: s,
+                    edit: EditKind::Ascii,
                 });
                 pos += n as u64;
             }
@@ -295,6 +384,7 @@ pub fn apply(tmpl: &Template, reader: &dyn ByteReader, start: u64) -> Result<Vec
                     size: n as u64,
                     kind: "bytes".into(),
                     value,
+                    edit: EditKind::Hex,
                 });
                 pos += n as u64;
             }
@@ -438,6 +528,42 @@ mod tests {
         for (name, src) in BUILTINS {
             assert!(Template::parse(src).is_ok(), "builtin {name} failed to parse");
         }
+    }
+
+    #[test]
+    fn encode_roundtrips() {
+        assert_eq!(encode(&EditKind::Uint(2, true), "258").unwrap(), vec![0x02, 0x01]);
+        assert_eq!(encode(&EditKind::Uint(2, false), "258").unwrap(), vec![0x01, 0x02]);
+        assert_eq!(encode(&EditKind::Sint(1, true), "-1").unwrap(), vec![0xFF]);
+        assert_eq!(encode(&EditKind::Sint(2, true), "-2").unwrap(), vec![0xFE, 0xFF]);
+        assert_eq!(encode(&EditKind::F32(true), "1.5").unwrap(), 1.5f32.to_le_bytes().to_vec());
+        assert_eq!(encode(&EditKind::Ascii, "Hi").unwrap(), b"Hi".to_vec());
+        assert_eq!(encode(&EditKind::Hex, "DE AD").unwrap(), vec![0xDE, 0xAD]);
+        assert_eq!(encode(&EditKind::Uint(4, true), "0x100").unwrap(), vec![0, 1, 0, 0]);
+    }
+
+    #[test]
+    fn encode_rejects_out_of_range() {
+        assert!(encode(&EditKind::Uint(1, true), "300").is_err());
+        assert!(encode(&EditKind::Uint(1, true), "-5").is_err());
+        assert!(encode(&EditKind::Sint(1, true), "200").is_err());
+        assert!(encode(&EditKind::None, "x").is_err());
+        assert!(encode(&EditKind::F32(true), "notnum").is_err());
+    }
+
+    #[test]
+    fn fields_carry_edit_kind() {
+        let d = doc(&[1u8, 0, 0, 0]);
+        let f = apply(&Template::parse("le\nu32 x\n").unwrap(), &d, 0).unwrap();
+        assert_eq!(field(&f, "x").edit, EditKind::Uint(4, true));
+    }
+
+    #[test]
+    fn edit_then_write_changes_bytes() {
+        // round-trip an edit: read field, encode a new value, verify bytes
+        let kind = EditKind::Uint(2, true);
+        let bytes = encode(&kind, "4660").unwrap(); // 0x1234
+        assert_eq!(bytes, vec![0x34, 0x12]);
     }
 
     #[test]
