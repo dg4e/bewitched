@@ -405,6 +405,21 @@ mod tests {
     }
 
     #[test]
+    fn write_through_visible_via_source() {
+        // simulate the live-edit loop: a ProcessSource over our own buffer, then
+        // poke a byte via the handle and read it back through the source.
+        let mut target: [u8; 8] = [0; 8];
+        let h = Arc::new(ProcessHandle::open_self().unwrap());
+        let addr = target.as_mut_ptr() as u64;
+        let src = ProcessSource::new(h.clone(), addr, 8, "self");
+        h.write(addr + 3, &[0xAB]).unwrap();
+        let mut buf = [0u8; 1];
+        assert_eq!(src.read_at(3, &mut buf), 1);
+        assert_eq!(buf[0], 0xAB);
+        assert_eq!(target[3], 0xAB);
+    }
+
+    #[test]
     fn privilege_helpers() {
         // own PID always opens without privileges, regardless of elevation
         assert!(ProcessHandle::open(own_pid()).is_ok());

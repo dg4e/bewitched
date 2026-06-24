@@ -864,7 +864,11 @@ impl App {
         self.doc = Document::from_source(std::sync::Arc::new(src));
         self.reset_cursor();
         self.process_target = Some(ProcTarget { handle, base });
-        self.status = format!("opened live memory: {label} ({} bytes)", len);
+        // Live memory is fixed-size: insert/delete would desync addresses, so
+        // force overwrite mode. Hex-view keystrokes now write through to RAM.
+        self.mode = EditMode::Overwrite;
+        self.process_ui.open = false;
+        self.status = format!("LIVE: {label} ({len} bytes) — edits write through to the process");
     }
 
     /// Write the current selection's bytes straight into the target process.
@@ -1014,6 +1018,13 @@ impl App {
         }
     }
 
+    /// When viewing a live process, mirror an overwritten byte straight to RAM.
+    fn live_poke(&self, offset: u64, byte: u8) {
+        if let Some(meta) = &self.process_target {
+            let _ = meta.handle.write(meta.base + offset, &[byte]);
+        }
+    }
+
     fn input_hex_nibble(&mut self, d: u8) {
         self.delete_selection();
         match self.mode {
@@ -1025,6 +1036,7 @@ impl App {
                     (b & 0xf0) | d
                 };
                 self.doc.overwrite(self.cursor, &[nb]);
+                self.live_poke(self.cursor, nb);
                 if self.nibble == 0 {
                     self.nibble = 1;
                 } else {
@@ -1038,7 +1050,9 @@ impl App {
                     self.nibble = 1;
                 } else {
                     let b = self.byte_at(self.cursor);
-                    self.doc.overwrite(self.cursor, &[(b & 0xf0) | d]);
+                    let nb = (b & 0xf0) | d;
+                    self.doc.overwrite(self.cursor, &[nb]);
+                    self.live_poke(self.cursor, nb);
                     self.nibble = 0;
                     self.cursor += 1;
                 }
@@ -1050,7 +1064,10 @@ impl App {
     fn input_byte(&mut self, byte: u8) {
         self.delete_selection();
         match self.mode {
-            EditMode::Overwrite => self.doc.overwrite(self.cursor, &[byte]),
+            EditMode::Overwrite => {
+                self.doc.overwrite(self.cursor, &[byte]);
+                self.live_poke(self.cursor, byte);
+            }
             EditMode::Insert => self.doc.insert(self.cursor, &[byte]),
         }
         self.cursor += 1;

@@ -341,6 +341,15 @@ impl App {
                 };
                 ui.label(egui::RichText::new(mode).color(theme::GREEN).strong());
                 ui.separator();
+                if self.process_target.is_some() {
+                    ui.label(
+                        egui::RichText::new("⏺ LIVE")
+                            .color(theme::RED)
+                            .strong(),
+                    )
+                    .on_hover_text("editing writes through to process memory");
+                    ui.separator();
+                }
                 ui.label(egui::RichText::new(&self.status).color(theme::status_color(&self.status)));
             });
         });
