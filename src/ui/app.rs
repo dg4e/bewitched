@@ -149,7 +149,7 @@ impl Default for ScriptState {
     fn default() -> Self {
         Self {
             open: false,
-            src: "// Rhai API: read(i) write(i,v) len() push(v) fill(s,n,v) resize(n,v)\n//   insert(i,v) remove(i,n) find_byte(v,from) find_str(s) count(v) sum() hex(s,n)\n//   read_u16/u32/u64/i16/i32/i64(i,le)  write_u16/u32/u64(i,v,le)\n//   read_f32/f64(i,le)  crc32()  to_upper()  to_lower()\n// XOR the selection (or whole file) with 0x42:\nfor i in 0..len() {\n    write(i, read(i) ^ 0x42);\n}\n".into(),
+            src: "// Rhai API: read(i) write(i,v) len() push(v) fill(s,n,v) resize(n,v)\n//   insert(i,v) remove(i,n) find_byte(v,from) find_str(s) count(v) sum() hex(s,n)\n//   read_u16/u32/u64/i16/i32/i64(i,le)  write_u16/u32/u64(i,v,le)\n//   read_f32/f64(i,le)  crc32()  to_upper()  to_lower()\n// doc: cursor() doc_len() scope_offset() sel_start() sel_len()\n//      set_cursor(i)  add_region(start,len,label)  add_note(off,len,text)\n// XOR the selection (or whole file) with 0x42:\nfor i in 0..len() {\n    write(i, read(i) ^ 0x42);\n}\n".into(),
             output: String::new(),
             whole_file: false,
         }
@@ -1018,16 +1018,35 @@ impl App {
         let (off, len) = self.scope(self.script.whole_file);
         let mut data = self.doc.read_range(off, len as usize);
         let orig = data.len() as u64;
-        match script::run(&self.script.src, &mut data) {
-            Ok(log) => {
+        let ctx = script::ScriptCtx {
+            cursor: self.cursor,
+            sel_start: self.selection_range().map(|(s, _)| s as i64).unwrap_or(-1),
+            sel_len: self.selection_range().map(|(s, e)| e - s).unwrap_or(0),
+            doc_len: self.doc.len(),
+            scope_offset: off,
+        };
+        match script::run_with_ctx(&self.script.src, &mut data, ctx) {
+            Ok(r) => {
                 self.doc.replace(off, orig, &data);
                 if let Some(meta) = &self.process_target {
                     let _ = meta.handle.write(meta.base + off, &data);
                 }
-                self.script.output = if log.trim().is_empty() {
+                // Apply requested document side effects.
+                for (start, rlen, label) in r.regions {
+                    let mut reg = Region::new(start, rlen, label);
+                    reg.folded = false;
+                    self.regions.push(reg);
+                }
+                for (offset, nlen, text) in r.notes {
+                    self.notes.push(sidecar::Note { offset, len: nlen, text });
+                }
+                if let Some(c) = r.set_cursor {
+                    self.cursor = c.min(self.doc.len());
+                }
+                self.script.output = if r.log.trim().is_empty() {
                     format!("ok — wrote {} byte(s)", data.len())
                 } else {
-                    log
+                    r.log
                 };
                 self.scroll_to_cursor = true;
             }

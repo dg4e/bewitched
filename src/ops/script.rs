@@ -10,11 +10,52 @@ use std::rc::Rc;
 
 use rhai::{Engine, EvalAltResult};
 
+/// Document context made available to a script (read-only).
+#[derive(Clone, Copy, Default)]
+pub struct ScriptCtx {
+    /// Absolute cursor offset in the document.
+    pub cursor: u64,
+    /// Selection start, or -1 if there is no selection.
+    pub sel_start: i64,
+    /// Selection length in bytes (0 if no selection).
+    pub sel_len: u64,
+    /// Total document length.
+    pub doc_len: u64,
+    /// Offset within the document where the edited buffer (`data`) begins.
+    pub scope_offset: u64,
+}
+
+/// Side effects a script can request, returned to the caller to apply.
+#[derive(Default)]
+pub struct ScriptResult {
+    pub log: String,
+    /// Move the cursor to this absolute offset.
+    pub set_cursor: Option<u64>,
+    /// Regions to add: (start, len, label).
+    pub regions: Vec<(u64, u64, String)>,
+    /// Notes to add: (offset, len, text).
+    pub notes: Vec<(u64, u64, String)>,
+}
+
 /// Run `src` against `data`, mutating it in place. Returns captured `print`
-/// output (one entry per line) on success, or an error message.
+/// output on success, or an error message. (Convenience wrapper that discards
+/// document side effects; see [`run_with_ctx`].)
 pub fn run(src: &str, data: &mut Vec<u8>) -> Result<String, String> {
+    run_with_ctx(src, data, ScriptCtx::default()).map(|r| r.log)
+}
+
+/// Run `src` with a document context, returning captured output plus any
+/// requested side effects (cursor move, regions, notes).
+pub fn run_with_ctx(
+    src: &str,
+    data: &mut Vec<u8>,
+    ctx: ScriptCtx,
+) -> Result<ScriptResult, String> {
     let buf = Rc::new(RefCell::new(std::mem::take(data)));
     let log = Rc::new(RefCell::new(String::new()));
+    let set_cursor: Rc<RefCell<Option<u64>>> = Rc::new(RefCell::new(None));
+    let regions: Rc<RefCell<Vec<(u64, u64, String)>>> = Rc::new(RefCell::new(Vec::new()));
+    let notes: Rc<RefCell<Vec<(u64, u64, String)>>> = Rc::new(RefCell::new(Vec::new()));
 
     let mut engine = Engine::new();
     engine.set_max_operations(50_000_000);
@@ -223,6 +264,33 @@ pub fn run(src: &str, data: &mut Vec<u8>) -> Result<String, String> {
         });
     }
 
+    // ---- document context bindings ----
+    engine.register_fn("cursor", move || ctx.cursor as i64);
+    engine.register_fn("doc_len", move || ctx.doc_len as i64);
+    engine.register_fn("scope_offset", move || ctx.scope_offset as i64);
+    engine.register_fn("sel_start", move || ctx.sel_start);
+    engine.register_fn("sel_len", move || ctx.sel_len as i64);
+    {
+        let sc = set_cursor.clone();
+        engine.register_fn("set_cursor", move |i: i64| {
+            *sc.borrow_mut() = Some(i.max(0) as u64);
+        });
+    }
+    {
+        let r = regions.clone();
+        engine.register_fn("add_region", move |start: i64, len: i64, label: &str| {
+            r.borrow_mut()
+                .push((start.max(0) as u64, len.max(0) as u64, label.to_string()));
+        });
+    }
+    {
+        let n = notes.clone();
+        engine.register_fn("add_note", move |off: i64, len: i64, text: &str| {
+            n.borrow_mut()
+                .push((off.max(0) as u64, len.max(0) as u64, text.to_string()));
+        });
+    }
+
     // ---- print capture ----
     {
         let l = log.clone();
@@ -243,17 +311,21 @@ pub fn run(src: &str, data: &mut Vec<u8>) -> Result<String, String> {
 
     let result = engine.run(src);
 
-    // Reclaim the buffer regardless of outcome (drop the engine first so the
-    // closures holding clones of `buf` are released).
+    // Reclaim the buffer and side-effects regardless of outcome (drop the engine
+    // first so the closures holding clones are released).
     drop(engine);
     let recovered = Rc::try_unwrap(buf)
         .map(|c| c.into_inner())
         .unwrap_or_default();
     *data = recovered;
-    let out = Rc::try_unwrap(log).map(|c| c.into_inner()).unwrap_or_default();
 
     match result {
-        Ok(()) => Ok(out),
+        Ok(()) => Ok(ScriptResult {
+            log: Rc::try_unwrap(log).map(|c| c.into_inner()).unwrap_or_default(),
+            set_cursor: Rc::try_unwrap(set_cursor).map(|c| c.into_inner()).unwrap_or_default(),
+            regions: Rc::try_unwrap(regions).map(|c| c.into_inner()).unwrap_or_default(),
+            notes: Rc::try_unwrap(notes).map(|c| c.into_inner()).unwrap_or_default(),
+        }),
         Err(e) => Err(format_err(&e)),
     }
 }
@@ -385,6 +457,47 @@ mod tests {
         // CRC32 of "Hello" = 0xF7D18982 = 4157704578
         assert_eq!(lines[0], "4157704578");
         assert_ne!(lines[0], lines[1]); // changed after lowercasing
+    }
+
+    #[test]
+    fn context_bindings_readable() {
+        let mut data = vec![0u8; 4];
+        let ctx = ScriptCtx {
+            cursor: 0x40,
+            sel_start: 0x10,
+            sel_len: 8,
+            doc_len: 0x100,
+            scope_offset: 0x10,
+        };
+        let out = run_with_ctx(
+            "print(cursor()); print(doc_len()); print(sel_start()); print(scope_offset());",
+            &mut data,
+            ctx,
+        )
+        .unwrap();
+        assert_eq!(out.log.lines().collect::<Vec<_>>(), vec!["64", "256", "16", "16"]);
+    }
+
+    #[test]
+    fn script_emits_side_effects() {
+        let mut data = vec![0u8; 16];
+        let r = run_with_ctx(
+            r#"set_cursor(0x80); add_region(0, 8, "header"); add_note(4, 2, "magic");"#,
+            &mut data,
+            ScriptCtx::default(),
+        )
+        .unwrap();
+        assert_eq!(r.set_cursor, Some(0x80));
+        assert_eq!(r.regions, vec![(0, 8, "header".to_string())]);
+        assert_eq!(r.notes, vec![(4, 2, "magic".to_string())]);
+    }
+
+    #[test]
+    fn no_selection_reports_minus_one() {
+        let mut data = vec![0u8];
+        let ctx = ScriptCtx { sel_start: -1, ..Default::default() };
+        let out = run_with_ctx("print(sel_start());", &mut data, ctx).unwrap();
+        assert_eq!(out.log.trim(), "-1");
     }
 
     #[test]
