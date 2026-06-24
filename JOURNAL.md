@@ -466,10 +466,16 @@ pure-core discipline; the fourth required a small engine addition.
   into ranges (with a length-mismatch tail and a cap), complementing the simple
   first-difference `fileops::compare`.
 
-- **Disassembly** (`disasm.rs`) is the one place a dependency earns its keep:
-  `iced-x86` is a pure-Rust x86/x64 decoder (no C toolchain), so it stays within
-  the "one `cargo build`" promise. It decodes from a bounded window at the cursor
-  and is tested against known encodings, including how bitness changes decoding.
+- **Disassembly** (`disasm.rs`) is multi-architecture and **entirely pure Rust** —
+  the alternative to a C dependency like Capstone. It dispatches by `Arch`:
+  x86-16/32/64 through `iced-x86`, and ARM (A32) / AArch64 (A64) through the
+  `yaxpeax` decoder family. ARM/A64 are fixed 4-byte instructions, so those
+  backends step the window in 4-byte words and emit a `.inst 0x…` placeholder for
+  undecodable words rather than stopping. Every backend is tested against known
+  encodings (x86 `xor/nop/ret` + bitness, AArch64 `ret/nop`, ARM `bx lr`). The
+  whole yaxpeax subtree is pure Rust (`bitvec`/`serde`/`num-traits`) with no `cc`,
+  no `*-sys`, and no C toolchain — so the single-`cargo build`, portable-binary
+  property is preserved while gaining Capstone-style multi-arch coverage.
 
 - **Binary templates** (`template.rs`) are the biggest usability lever and were
   built *without* a dependency: a compact line-oriented DSL (`magic`, `le/be`,
@@ -558,8 +564,10 @@ this environment or genuinely optional:
   `VirtualQueryEx` (the `windows`/`windows-sys` crate). It is deliberately a stub
   because there is no Windows target here to compile or test it against —
   shipping unverifiable platform FFI would be dishonest.
-- **ARM/RISC-V disassembly.** `iced-x86` is x86-only; other ISAs need another
-  decoder (likely `capstone`, a C dependency).
+- **More disassembly architectures.** x86-16/32/64, ARM A32 and AArch64 are done
+  (pure Rust via iced-x86 + yaxpeax). MIPS / PowerPC / RISC-V have pure-Rust
+  `yaxpeax-*` decoders that would slot into the same `Arch` dispatch; ARM Thumb
+  needs the variable-length (2/4-byte) path rather than the fixed-4 stepping.
 - **Multi-cursor editing.** Several independent carets is mostly a hex-view UI
   change with fiddly edge cases (simultaneous typing, overlapping edits).
 - **Scripting reach.** The Rhai API is intentionally small (a byte buffer); it
