@@ -595,14 +595,23 @@ driving the tools, a model does.
   `ui::run` checks for `--mcp` and calls `crate::mcp::serve()` *before* creating a
   window — the server is headless and never touches the GUI.
 
-- **Statelessness is the design.** Every tool takes a file/device `path`, opens a
-  `Document` (mmap), runs an existing `ops` function against it, and returns JSON
-  text. There is no session or open-document state to manage, which keeps the
-  server trivial and each call independent — and it works precisely because the
-  feature operations were written against `&dyn ByteReader` from the start, not
-  against GUI state. The ten tools (`read_hex`, `checksums`, `statistics`,
-  `search`, `strings`, `signatures`, `disassemble`, `inspect`, `export`,
-  `apply_template`) are thin adapters over `ops`.
+- **Read tools are stateless.** The ten analysis tools (`read_hex`, `checksums`,
+  `statistics`, `search`, `strings`, `signatures`, `disassemble`, `inspect`,
+  `export`, `apply_template`) each take a file/device `path`, open a `Document`
+  (mmap), run an existing `ops` function, and return JSON text — no state, each
+  call independent. This works precisely because the feature operations were
+  written against `&dyn ByteReader` from the start, not against GUI state.
+
+- **Write tools and sessions add the state that's worth keeping.** One-shot write
+  tools (`write_bytes`, `transform`, `patch_create`, `patch_apply`) open, edit,
+  and save in a single call. For multi-step editing, a `Server { sessions }` holds
+  open `Document`s keyed by id: `open` returns a session, then
+  `session_read/write/insert/delete/undo/save/close` drive the *same* piece-table
+  engine the GUI uses — so edits are undoable and only hit disk on `session_save`.
+  `dispatch_tool` is the one method that needs `&mut self`; stateless tools fall
+  through to the free `call_tool`. An agent can now both analyze and edit a binary
+  through MCP, verified end-to-end (open → write → save → close) against the real
+  binary over a piped stdio session.
 
 - **Testability.** `handle(&Value) -> Option<Value>` is a pure function of the
   request (notifications return `None`), so the protocol is unit-tested with
@@ -642,12 +651,11 @@ privilege handling. What remains is narrow:
   hand-written formatter), so they are left out rather than half-done. The
   PowerPC backend (`ppc750cl`) is specifically the 750CL flavor; a broader PPC
   decoder could replace it.
-- **Multi-cursor delete.** Insert and overwrite broadcast to all carets; a
-  symmetric multi-caret backspace/delete (with the mirror-image offset rebasing)
-  is a small follow-up.
-- **MCP write tools / sessions.** The MCP server is read-only and stateless by
-  design (each call opens a path). Mutating tools (patch, transform, write) and an
-  open-document session would be a natural extension.
-- **Script document bindings.** The Rhai API operates on the materialized
-  selection/buffer; document/region/cursor bindings and a saved-script library
-  would let scripts reach beyond the current scope.
+- **Script library / persistence.** Scripts can now read document context and
+  emit cursor/region/note side effects, but there is no saved-script library or
+  way to run a script headlessly (e.g. an MCP `script` tool) yet.
+- **MCP resources / prompts.** The server implements MCP `tools`; the
+  `resources` and `prompts` capabilities (exposing files as readable resources,
+  canned analysis prompts) are unimplemented.
+- **Windows runtime testing.** The Windows process backend remains
+  compile-verified only (no Windows host here to run it).

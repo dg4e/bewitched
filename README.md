@@ -68,9 +68,11 @@ blocks.
   and `write_*` (with endianness), `insert/remove`, `find_byte/find_str`,
   `count/sum/crc32/hex`, `to_upper/to_lower` — and captured output.
 - **MCP server**: `ganghex --mcp` runs a Model Context Protocol server (JSON-RPC
-  over stdio) exposing read_hex, checksums, statistics, search, strings,
-  signatures, disassemble, inspect, export and apply_template as tools an
-  LLM/agent can call.
+  over stdio). Read tools (read_hex, checksums, statistics, search, strings,
+  signatures, disassemble, inspect, export, apply_template), one-shot write
+  tools (write_bytes, transform, patch_create, patch_apply), and **editing
+  sessions** (open → session_read/write/insert/delete/undo/save/close) let an
+  LLM/agent both analyze *and* edit binaries.
 - **Annotations**: bookmarks, regions and free-text notes persist to a
   human-readable `<file>.ghx` sidecar (auto-loaded on reopen).
 - **Disassembly** (14 architectures, pure Rust — no C dependency): x86-16/32/64
@@ -79,7 +81,7 @@ blocks.
   (`yaxpeax-msp430`), 6502 (`yaxpeax-6502`) and SM83/Game Boy (`yaxpeax-sm83`) —
   pick the architecture in the disassembly window.
 - **Multi-cursor editing**: Ctrl/Cmd+click adds extra carets; edits and paste
-  (overwrite *and* insert mode) broadcast to all of them. Esc clears.
+  (overwrite *and* insert mode) broadcast to all of them; backspace/delete too. Esc clears.
 - **Byte map**: visualize the whole file as a colored image to spot structure;
   click a pixel to jump.
 - **Transforms** on a selection: XOR/AND/OR/ADD/SUB/NOT, rotate, shift,
@@ -114,7 +116,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (191 tests)
+cargo test                          # run the test suite (199 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -145,10 +147,13 @@ Point an MCP client at the binary:
 }
 ```
 
-Tools: `read_hex`, `checksums`, `statistics`, `search`, `strings`,
+Read tools: `read_hex`, `checksums`, `statistics`, `search`, `strings`,
 `signatures`, `disassemble` (14 architectures), `inspect`, `export`,
-`apply_template`. Each takes a file/device `path` and returns JSON, e.g.
-`disassemble {path, offset, count, arch}` or `checksums {path, algorithms}`.
+`apply_template` — each takes a file/device `path` and returns JSON, e.g.
+`disassemble {path, offset, count, arch}`. Write tools: `write_bytes`,
+`transform`, `patch_create`, `patch_apply`. Editing sessions: `open` returns a
+session id, then `session_read/write/insert/delete/undo/save/close` edit it
+through the piece table (undoable; written on `session_save`).
 
 ## Raw disk / RAM access
 
@@ -196,7 +201,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **191 tests**
+Engine, feature operations and GUI are implemented and covered by **199 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 
