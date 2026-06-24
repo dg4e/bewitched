@@ -66,13 +66,17 @@ blocks.
 - **Scripting (Rhai)**: run a sandboxed script over the selection/whole file
   with a rich byte API — `read/write`, typed `read_u16…u64`/`i16…i64`/`f32/f64`
   and `write_*` (with endianness), `insert/remove`, `find_byte/find_str`,
-  `count/sum/crc32/hex`, `to_upper/to_lower` — and captured output.
+  `count/sum/crc32/hex`, `to_upper/to_lower`, document context
+  (`cursor/sel_start/doc_len/…`) and side effects (`set_cursor/add_region/
+  add_note`) — plus a **library** of built-in scripts (XOR, ROT13, reverse, …).
 - **MCP server**: `ganghex --mcp` runs a Model Context Protocol server (JSON-RPC
-  over stdio). Read tools (read_hex, checksums, statistics, search, strings,
-  signatures, disassemble, inspect, export, apply_template), one-shot write
-  tools (write_bytes, transform, patch_create, patch_apply), and **editing
-  sessions** (open → session_read/write/insert/delete/undo/save/close) let an
-  LLM/agent both analyze *and* edit binaries.
+  over stdio) advertising `tools`, `resources` and `prompts`. Read tools
+  (read_hex, checksums, statistics, search, strings, signatures, disassemble,
+  inspect, export, apply_template), write tools (write_bytes, transform,
+  patch_create/apply, **script**), and **editing sessions** (open →
+  session_read/write/insert/delete/undo/save/script/close) let an LLM/agent both
+  analyze *and* edit binaries; resources expose templates/scripts/reference
+  lists and prompts give canned analysis recipes.
 - **Annotations**: bookmarks, regions and free-text notes persist to a
   human-readable `<file>.ghx` sidecar (auto-loaded on reopen).
 - **Disassembly** (14 architectures, pure Rust — no C dependency): x86-16/32/64
@@ -116,7 +120,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (199 tests)
+cargo test                          # run the test suite (207 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -151,9 +155,14 @@ Read tools: `read_hex`, `checksums`, `statistics`, `search`, `strings`,
 `signatures`, `disassemble` (14 architectures), `inspect`, `export`,
 `apply_template` — each takes a file/device `path` and returns JSON, e.g.
 `disassemble {path, offset, count, arch}`. Write tools: `write_bytes`,
-`transform`, `patch_create`, `patch_apply`. Editing sessions: `open` returns a
-session id, then `session_read/write/insert/delete/undo/save/close` edit it
-through the piece table (undoable; written on `session_save`).
+`transform`, `patch_create`, `patch_apply`, `script` (run Rhai over a range).
+Editing sessions: `open` returns a session id, then
+`session_read/write/insert/delete/undo/save/script/close` edit it through the
+piece table (undoable; written on `session_save`).
+
+The server also serves **resources** (`ganghex://templates/…`,
+`ganghex://scripts/…`, `ganghex://reference/{architectures,formats,checksums}`)
+and **prompts** (`identify-file`, `analyze-binary`, `find-secrets`).
 
 ## Raw disk / RAM access
 
@@ -201,7 +210,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **199 tests**
+Engine, feature operations and GUI are implemented and covered by **207 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 

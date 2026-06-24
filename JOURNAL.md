@@ -613,12 +613,26 @@ driving the tools, a model does.
   through MCP, verified end-to-end (open → write → save → close) against the real
   binary over a piped stdio session.
 
-- **Testability.** `handle(&Value) -> Option<Value>` is a pure function of the
-  request (notifications return `None`), so the protocol is unit-tested with
-  literal JSON (initialize / tools-list / tools-call / errors), and several tools
-  are exercised end-to-end against temp files — plus a real piped stdio session as
-  a smoke test. This mirrors the whole codebase's bias: put the logic in pure,
-  testable functions and keep the I/O shell thin.
+- **A `script` tool closes the loop.** `script` / `session_script` run a Rhai
+  script (inline `source` or a named `library` entry) over a file/session range
+  and report the output plus any `add_region`/`add_note`/`set_cursor` side effects
+  as JSON — the same engine and `ScriptCtx` the GUI uses, now driveable by an
+  agent. The script *library* (`script::LIBRARY`) is shared between the GUI's
+  Library dropdown and the MCP tool, mirroring how `template::BUILTINS` is shared.
+
+- **Resources and prompts.** Beyond `tools`, the server implements MCP
+  `resources` (the built-in templates, the script library, and reference lists —
+  architectures / export formats / checksum algorithms — under `ganghex://` URIs)
+  and `prompts` (canned recipes `identify-file` / `analyze-binary` /
+  `find-secrets` that fill in the target path and steer the model to the right
+  tools). `initialize` advertises all three capabilities.
+
+- **Testability.** `Server::handle(&Value) -> Option<Value>` is essentially a pure
+  function of the request (notifications return `None`), so the protocol is
+  unit-tested with literal JSON (initialize / list / call / read / get / errors),
+  and tools/resources/prompts are exercised end-to-end against temp files — plus
+  real piped stdio sessions as smoke tests. This mirrors the whole codebase's
+  bias: put the logic in pure, testable functions and keep the I/O shell thin.
 
 ## 12. Known limitations and future work
 
@@ -651,11 +665,11 @@ privilege handling. What remains is narrow:
   hand-written formatter), so they are left out rather than half-done. The
   PowerPC backend (`ppc750cl`) is specifically the 750CL flavor; a broader PPC
   decoder could replace it.
-- **Script library / persistence.** Scripts can now read document context and
-  emit cursor/region/note side effects, but there is no saved-script library or
-  way to run a script headlessly (e.g. an MCP `script` tool) yet.
-- **MCP resources / prompts.** The server implements MCP `tools`; the
-  `resources` and `prompts` capabilities (exposing files as readable resources,
-  canned analysis prompts) are unimplemented.
+- **User-defined script library / persistence.** The script library is built-in
+  and read-only; letting users save their own scripts to disk (and exposing those
+  over MCP too) is the next step.
+- **MCP resource subscriptions / file resources.** Resources are currently the
+  static built-ins; exposing arbitrary opened files as resources, and supporting
+  `resources/subscribe` change notifications, would deepen the integration.
 - **Windows runtime testing.** The Windows process backend remains
   compile-verified only (no Windows host here to run it).
