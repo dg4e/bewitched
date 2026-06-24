@@ -66,8 +66,10 @@ blocks.
   with a `read/write/len/push/fill/resize` byte API and captured output.
 - **Annotations**: bookmarks, regions and free-text notes persist to a
   human-readable `<file>.ghx` sidecar (auto-loaded on reopen).
-- **Disassembly** (multi-arch, pure Rust): x86-16/32/64 (`iced-x86`), ARM A32
-  and AArch64 (`yaxpeax`) — pick the architecture in the disassembly window.
+- **Disassembly** (multi-arch, pure Rust): x86-16/32/64 (`iced-x86`), ARM A32 /
+  Thumb / AArch64 (`yaxpeax-arm`), MIPS LE/BE (`yaxpeax-mips`), PowerPC
+  (`ppc750cl`) and RISC-V 32/64 (`raki`) — pick the architecture in the
+  disassembly window. No C dependency.
 - **Byte map**: visualize the whole file as a colored image to spot structure;
   click a pixel to jump.
 - **Transforms** on a selection: XOR/AND/OR/ADD/SUB/NOT, rotate, shift,
@@ -102,7 +104,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (166 tests)
+cargo test                          # run the test suite (171 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -151,7 +153,7 @@ src/
     patch.rs    IPS patch create / parse / apply
     diff.rs     detailed binary diff (all differing ranges)
     byteplot.rs byte-as-pixel visualization
-    disasm.rs   multi-arch disassembly: x86 (iced-x86) + ARM/A64 (yaxpeax)
+    disasm.rs   multi-arch disasm: x86/ARM/Thumb/AArch64/MIPS/PowerPC/RISC-V (pure Rust)
     template.rs binary template DSL + interpreter + built-ins + field encode
     script.rs   sandboxed Rhai scripting over a byte buffer
     sidecar.rs  persistent annotations (.ghx): bookmarks/regions/notes
@@ -164,7 +166,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **166 tests**
+Engine, feature operations and GUI are implemented and covered by **171 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 

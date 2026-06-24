@@ -467,15 +467,38 @@ pure-core discipline; the fourth required a small engine addition.
   first-difference `fileops::compare`.
 
 - **Disassembly** (`disasm.rs`) is multi-architecture and **entirely pure Rust** —
-  the alternative to a C dependency like Capstone. It dispatches by `Arch`:
-  x86-16/32/64 through `iced-x86`, and ARM (A32) / AArch64 (A64) through the
-  `yaxpeax` decoder family. ARM/A64 are fixed 4-byte instructions, so those
-  backends step the window in 4-byte words and emit a `.inst 0x…` placeholder for
-  undecodable words rather than stopping. Every backend is tested against known
-  encodings (x86 `xor/nop/ret` + bitness, AArch64 `ret/nop`, ARM `bx lr`). The
-  whole yaxpeax subtree is pure Rust (`bitvec`/`serde`/`num-traits`) with no `cc`,
-  no `*-sys`, and no C toolchain — so the single-`cargo build`, portable-binary
-  property is preserved while gaining Capstone-style multi-arch coverage.
+  the alternative to a C dependency like Capstone. It dispatches by `Arch` across
+  **eleven targets**: x86-16/32/64 (`iced-x86`), ARM A32 / ARM Thumb / AArch64
+  (`yaxpeax-arm`), MIPS little- and big-endian (`yaxpeax-mips`), PowerPC
+  (`ppc750cl`) and RISC-V 32/64 (`raki`). Two decoding shapes cover them all:
+
+  - **Fixed-width** (`fixed4`): x86 (variable but handled by iced's own decoder),
+    ARM A32, AArch64, MIPS and PowerPC step in 4-byte words. Endianness lives in
+    the per-arch closure — MIPS-BE byte-swaps each word before decoding (the
+    `yaxpeax-mips` reader is little-endian-only) while the *displayed* raw bytes
+    stay as they appear on disk; PowerPC reads big-endian words.
+  - **Variable-width** (`variable`): ARM Thumb and RISC-V decide each
+    instruction's length from its first bytes — Thumb from the top 5 bits of the
+    first halfword (16- vs 32-bit Thumb-2), RISC-V from the low 2 bits (16-bit
+    compressed vs 32-bit) — then advance by exactly that many bytes. Undecodable
+    words become `.inst` / `.word` / `.hword` placeholders so the listing never
+    stalls.
+
+  Integrating different decoder ecosystems behind one `Arch` enum is the whole
+  point: each crate has its own API (yaxpeax's `Decoder`/`U8Reader` trait dance,
+  `raki`'s `u32::decode(Isa)`, `ppc750cl`'s `Ins::new(word).simplified()`), but
+  the UI only sees `disassemble(reader, offset, count, arch) -> Vec<Insn>`. One
+  wrinkle worth recording: `yaxpeax-mips` still targets the older `yaxpeax-arch`
+  0.2 traits, so it is pulled in under a renamed `yaxpeax-arch-02` dependency that
+  coexists with the 0.3 crate the ARM decoders use — Cargo is happy to compile
+  both, and each backend imports the matching `Decoder`/`U8Reader`.
+
+  Every backend is tested against known encodings (x86 `xor/nop/ret` + bitness,
+  AArch64 `ret/nop`, ARM `bx lr`, Thumb `bx lr` as a 16-bit step, RISC-V `addi`
+  plus a compressed 2-byte step, PowerPC `blr`, MIPS word decode). The entire
+  decoder subtree is pure Rust — no `cc`, no `*-sys`, no C toolchain — so the
+  single-`cargo build`, portable-binary property holds while matching the breadth
+  Capstone is usually reached for.
 
 - **Binary templates** (`template.rs`) are the biggest usability lever and were
   built *without* a dependency: a compact line-oriented DSL (`magic`, `le/be`,
@@ -564,10 +587,11 @@ this environment or genuinely optional:
   `VirtualQueryEx` (the `windows`/`windows-sys` crate). It is deliberately a stub
   because there is no Windows target here to compile or test it against —
   shipping unverifiable platform FFI would be dishonest.
-- **More disassembly architectures.** x86-16/32/64, ARM A32 and AArch64 are done
-  (pure Rust via iced-x86 + yaxpeax). MIPS / PowerPC / RISC-V have pure-Rust
-  `yaxpeax-*` decoders that would slot into the same `Arch` dispatch; ARM Thumb
-  needs the variable-length (2/4-byte) path rather than the fixed-4 stepping.
+- **Even more disassembly architectures.** x86-16/32/64, ARM A32/Thumb/AArch64,
+  MIPS (LE/BE), PowerPC and RISC-V 32/64 are done (all pure Rust). SPARC and
+  other long-tail ISAs would need additional decoder crates; the PowerPC backend
+  (`ppc750cl`) is specifically the 750CL flavor, so a broader PPC decoder could
+  replace it later.
 - **Multi-cursor editing.** Several independent carets is mostly a hex-view UI
   change with fiddly edge cases (simultaneous typing, overlapping edits).
 - **Scripting reach.** The Rhai API is intentionally small (a byte buffer); it

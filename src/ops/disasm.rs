@@ -11,7 +11,13 @@ pub enum Arch {
     X86_32,
     X86_64,
     Arm,
+    ArmThumb,
     Aarch64,
+    MipsLe,
+    MipsBe,
+    PowerPc,
+    RiscV32,
+    RiscV64,
 }
 
 impl Arch {
@@ -20,7 +26,13 @@ impl Arch {
         Arch::X86_32,
         Arch::X86_64,
         Arch::Arm,
+        Arch::ArmThumb,
         Arch::Aarch64,
+        Arch::MipsLe,
+        Arch::MipsBe,
+        Arch::PowerPc,
+        Arch::RiscV32,
+        Arch::RiscV64,
     ];
 
     pub fn label(self) -> &'static str {
@@ -29,7 +41,13 @@ impl Arch {
             Arch::X86_32 => "x86-32",
             Arch::X86_64 => "x86-64",
             Arch::Arm => "ARM (A32)",
+            Arch::ArmThumb => "ARM Thumb",
             Arch::Aarch64 => "ARM64 (A64)",
+            Arch::MipsLe => "MIPS (LE)",
+            Arch::MipsBe => "MIPS (BE)",
+            Arch::PowerPc => "PowerPC",
+            Arch::RiscV32 => "RISC-V 32",
+            Arch::RiscV64 => "RISC-V 64",
         }
     }
 
@@ -63,7 +81,13 @@ pub fn disassemble(reader: &dyn ByteReader, offset: u64, count: usize, arch: Arc
             disasm_x86(&code, offset, count, arch.x86_bitness().unwrap())
         }
         Arch::Arm => disasm_arm(&code, offset, count),
+        Arch::ArmThumb => disasm_thumb(&code, offset, count),
         Arch::Aarch64 => disasm_aarch64(&code, offset, count),
+        Arch::MipsLe => disasm_mips(&code, offset, count, false),
+        Arch::MipsBe => disasm_mips(&code, offset, count, true),
+        Arch::PowerPc => disasm_ppc(&code, offset, count),
+        Arch::RiscV32 => disasm_riscv(&code, offset, count, raki::Isa::Rv32),
+        Arch::RiscV64 => disasm_riscv(&code, offset, count, raki::Isa::Rv64),
     }
 }
 
@@ -142,6 +166,121 @@ fn word_placeholder(chunk: &[u8]) -> String {
     format!(".inst 0x{:08x}", w)
 }
 
+/// Variable-length stepping: `step(remaining)` returns `(byte_len, text)` for the
+/// instruction at the front, or `None` to stop.
+fn variable(
+    code: &[u8],
+    base: u64,
+    count: usize,
+    mut step: impl FnMut(&[u8]) -> Option<(usize, String)>,
+) -> Vec<Insn> {
+    let mut out = Vec::with_capacity(count);
+    let mut pos = 0usize;
+    while pos < code.len() && out.len() < count {
+        match step(&code[pos..]) {
+            Some((len, text)) if len > 0 && pos + len <= code.len() => {
+                out.push(Insn {
+                    offset: base + pos as u64,
+                    bytes: code[pos..pos + len].to_vec(),
+                    text,
+                });
+                pos += len;
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+/// MIPS (fixed 4 bytes). The decoder reads little-endian words, so for big-endian
+/// MIPS we byte-swap each word before decoding; the displayed raw bytes stay as
+/// they appear on disk.
+fn disasm_mips(code: &[u8], base: u64, count: usize, big_endian: bool) -> Vec<Insn> {
+    use yaxpeax_arch_02::{Decoder, U8Reader};
+    use yaxpeax_mips::MipsDecoder;
+    let decoder = MipsDecoder::default();
+    fixed4(code, base, count, |chunk| {
+        let ordered = if big_endian {
+            [chunk[3], chunk[2], chunk[1], chunk[0]]
+        } else {
+            [chunk[0], chunk[1], chunk[2], chunk[3]]
+        };
+        let mut reader = U8Reader::new(&ordered);
+        match decoder.decode(&mut reader) {
+            Ok(inst) => inst.to_string(),
+            Err(_) => word_placeholder(chunk),
+        }
+    })
+}
+
+/// PowerPC (fixed 4 bytes, big-endian).
+fn disasm_ppc(code: &[u8], base: u64, count: usize) -> Vec<Insn> {
+    fixed4(code, base, count, |chunk| {
+        let w = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        ppc750cl::Ins::new(w).simplified().to_string()
+    })
+}
+
+/// ARM Thumb (variable 2/4 bytes). The top 5 bits of the first halfword decide
+/// whether it is a 32-bit Thumb-2 instruction.
+fn disasm_thumb(code: &[u8], base: u64, count: usize) -> Vec<Insn> {
+    use yaxpeax_arch::{Decoder, U8Reader};
+    use yaxpeax_arm::armv7::InstDecoder;
+    let decoder = InstDecoder::default_thumb();
+    variable(code, base, count, move |rem| {
+        if rem.len() < 2 {
+            return None;
+        }
+        let hw = u16::from_le_bytes([rem[0], rem[1]]);
+        let len = if (hw >> 11) >= 0x1d { 4 } else { 2 };
+        if rem.len() < len {
+            return None;
+        }
+        let mut reader = U8Reader::new(&rem[..len]);
+        let text = match decoder.decode(&mut reader) {
+            Ok(inst) => inst.to_string(),
+            Err(_) if len == 2 => format!(".hword 0x{:04x}", hw),
+            Err(_) => format!(
+                ".word 0x{:08x}",
+                u32::from_le_bytes([rem[0], rem[1], rem[2], rem[3]])
+            ),
+        };
+        Some((len, text))
+    })
+}
+
+/// RISC-V (variable 2/4 bytes). A low 2-bit field of `0b11` marks a 32-bit
+/// instruction; otherwise it is a 16-bit compressed (C-extension) instruction.
+fn disasm_riscv(code: &[u8], base: u64, count: usize, isa: raki::Isa) -> Vec<Insn> {
+    use raki::Decode;
+    variable(code, base, count, move |rem| {
+        if rem.is_empty() {
+            return None;
+        }
+        if rem[0] & 0b11 != 0b11 {
+            if rem.len() < 2 {
+                return None;
+            }
+            let hw = u16::from_le_bytes([rem[0], rem[1]]);
+            let text = match hw.decode(isa) {
+                Ok(inst) => inst.to_string(),
+                Err(_) => format!(".hword 0x{:04x}", hw),
+            };
+            Some((2, text))
+        } else {
+            if rem.len() < 4 {
+                return None;
+            }
+            let w = u32::from_le_bytes([rem[0], rem[1], rem[2], rem[3]]);
+            let text = match w.decode(isa) {
+                Ok(inst) => inst.to_string(),
+                Err(_) => format!(".word 0x{:08x}", w),
+            };
+            Some((4, text))
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,5 +350,59 @@ mod tests {
         let d = doc(&[0x90; 32]);
         assert_eq!(disassemble(&d, 0, 5, Arch::X86_64).len(), 5);
         assert!(disassemble(&Document::empty(), 0, 8, Arch::Aarch64).is_empty());
+    }
+
+    #[test]
+    fn arm_thumb_variable_length() {
+        // bx lr = 0x4770 (16-bit thumb); push {r7,lr} = 0xB580 (16-bit)
+        let d = doc(&[0x70, 0x47, 0x80, 0xB5]);
+        let ins = disassemble(&d, 0, 8, Arch::ArmThumb);
+        assert_eq!(ins.len(), 2);
+        assert_eq!(ins[0].bytes.len(), 2); // 16-bit
+        assert_eq!(ins[1].offset, 2);
+        assert!(ins[0].text.contains("bx"), "got {:?}", ins[0].text);
+    }
+
+    #[test]
+    fn riscv_addi() {
+        // 0xEEC28293 = addi t0, t0, -276 (32-bit); little-endian on disk
+        let d = doc(&[0x93, 0x82, 0xC2, 0xEE]);
+        let ins = disassemble(&d, 0, 4, Arch::RiscV64);
+        assert_eq!(ins.len(), 1);
+        assert_eq!(ins[0].bytes.len(), 4);
+        assert!(ins[0].text.contains("addi"), "got {:?}", ins[0].text);
+    }
+
+    #[test]
+    fn riscv_compressed_is_two_bytes() {
+        // a C-extension instruction has low bits != 0b11 -> 16-bit step
+        // 0x0001 = c.nop; place it then a 32-bit addi after to check lengths
+        let d = doc(&[0x01, 0x00, 0x93, 0x82, 0xC2, 0xEE]);
+        let ins = disassemble(&d, 0, 8, Arch::RiscV64);
+        assert_eq!(ins[0].bytes.len(), 2);
+        assert_eq!(ins[1].offset, 2);
+        assert_eq!(ins[1].bytes.len(), 4);
+    }
+
+    #[test]
+    fn powerpc_blr_big_endian() {
+        // blr = 0x4E800020, big-endian on disk
+        let d = doc(&[0x4E, 0x80, 0x00, 0x20]);
+        let ins = disassemble(&d, 0, 4, Arch::PowerPc);
+        assert_eq!(ins.len(), 1);
+        assert!(ins[0].text.contains("blr"), "got {:?}", ins[0].text);
+    }
+
+    #[test]
+    fn mips_decodes_word() {
+        // 0x00000000 = nop (sll zero,zero,0) — valid in both endiannesses
+        let d = doc(&[0x00, 0x00, 0x00, 0x00]);
+        let le = disassemble(&d, 0, 1, Arch::MipsLe);
+        assert_eq!(le.len(), 1);
+        assert!(!le[0].text.is_empty());
+        assert!(!le[0].text.starts_with(".inst"), "got {:?}", le[0].text);
+        // big-endian path also yields a decode for the same all-zero word
+        let be = disassemble(&d, 0, 1, Arch::MipsBe);
+        assert_eq!(be[0].bytes, vec![0, 0, 0, 0]);
     }
 }
