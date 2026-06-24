@@ -8,44 +8,65 @@
 //! Transport is the standard MCP stdio transport: newline-delimited JSON-RPC 2.0
 //! on stdin/stdout. Run with `ganghex --mcp`.
 
+use std::collections::HashMap;
 use std::io::{BufRead, Write};
 
 use serde_json::{json, Value};
 
 use crate::data::Document;
-use crate::ops::{checksum, disasm, export, inspect, search, signatures, stats, strings, template, Progress};
+use crate::ops::{
+    checksum, disasm, export, inspect, patch, search, signatures, stats, strings, template,
+    transform, Progress,
+};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
-/// Run the MCP server loop over stdin/stdout until EOF.
+/// Run an MCP server over stdio until EOF.
 pub fn serve() -> std::io::Result<()> {
-    let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let req: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                let err = error_response(&Value::Null, -32700, &format!("parse error: {e}"));
-                writeln!(out, "{err}")?;
-                out.flush()?;
-                continue;
-            }
-        };
-        if let Some(resp) = handle(&req) {
-            writeln!(out, "{resp}")?;
-            out.flush()?;
-        }
-    }
-    Ok(())
+    Server::new().run_stdio()
 }
 
-/// Handle one JSON-RPC request, returning a response (or `None` for notifications).
-pub fn handle(req: &Value) -> Option<Value> {
+/// MCP server state. Holds open editing sessions across `tools/call`s.
+#[derive(Default)]
+pub struct Server {
+    sessions: HashMap<u64, Document>,
+    next_id: u64,
+}
+
+impl Server {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Run the server loop over stdin/stdout until EOF.
+    pub fn run_stdio(&mut self) -> std::io::Result<()> {
+        let stdin = std::io::stdin();
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        for line in stdin.lock().lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let req: Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(e) => {
+                    let err = error_response(&Value::Null, -32700, &format!("parse error: {e}"));
+                    writeln!(out, "{err}")?;
+                    out.flush()?;
+                    continue;
+                }
+            };
+            if let Some(resp) = self.handle(&req) {
+                writeln!(out, "{resp}")?;
+                out.flush()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle one JSON-RPC request, returning a response (or `None` for notifications).
+    pub fn handle(&mut self, req: &Value) -> Option<Value> {
     let id = req.get("id").cloned().unwrap_or(Value::Null);
     let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
@@ -67,7 +88,7 @@ pub fn handle(req: &Value) -> Option<Value> {
             let params = req.get("params").cloned().unwrap_or(Value::Null);
             let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            match call_tool(name, &args) {
+            match self.dispatch_tool(name, &args) {
                 Ok(text) => Some(result_response(
                     &id,
                     json!({ "content": [ { "type": "text", "text": text } ] }),
@@ -80,6 +101,149 @@ pub fn handle(req: &Value) -> Option<Value> {
         }
         _ => Some(error_response(&id, -32601, &format!("method not found: {method}"))),
     }
+    }
+
+    /// Dispatch a tool call. Session/write tools use server state; everything
+    /// else delegates to the stateless `call_tool`.
+    fn dispatch_tool(&mut self, name: &str, args: &Value) -> Result<String, String> {
+        match name {
+            "open" => {
+                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+                let len = doc.len();
+                let id = self.next_id;
+                self.next_id += 1;
+                self.sessions.insert(id, doc);
+                Ok(json!({ "session": id, "length": len }).to_string())
+            }
+            "session_close" => {
+                let id = session_id(args)?;
+                self.sessions.remove(&id);
+                Ok(json!({ "closed": id }).to_string())
+            }
+            _ if name.starts_with("session_") => {
+                let id = session_id(args)?;
+                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let doc = self.sessions.get_mut(&id).ok_or("no such session")?;
+                match name {
+                    "session_read" => {
+                        let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(256);
+                        Ok(export::export(doc, off, len, export::Format::PlainHexDump))
+                    }
+                    "session_write" => {
+                        let bytes = parse_hex_arg(args)?;
+                        doc.overwrite(off, &bytes);
+                        Ok(json!({ "written": bytes.len(), "length": doc.len() }).to_string())
+                    }
+                    "session_insert" => {
+                        let bytes = parse_hex_arg(args)?;
+                        doc.insert(off, &bytes);
+                        Ok(json!({ "inserted": bytes.len(), "length": doc.len() }).to_string())
+                    }
+                    "session_delete" => {
+                        let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(0);
+                        doc.delete(off, len);
+                        Ok(json!({ "deleted": len, "length": doc.len() }).to_string())
+                    }
+                    "session_undo" => {
+                        let ok = doc.can_undo();
+                        doc.undo();
+                        Ok(json!({ "undone": ok, "length": doc.len() }).to_string())
+                    }
+                    "session_save" => {
+                        let dest = args.get("path").and_then(|p| p.as_str()).map(String::from);
+                        let target = dest.or_else(|| {
+                            doc.path.as_ref().map(|p| p.display().to_string())
+                        });
+                        let target = target.ok_or("no save path (pass 'path')")?;
+                        doc.save_to(&target).map_err(|e| format!("save failed: {e}"))?;
+                        Ok(json!({ "saved": target }).to_string())
+                    }
+                    other => Err(format!("unknown session tool: {other}")),
+                }
+            }
+            "write_bytes" => {
+                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let bytes = parse_hex_arg(args)?;
+                let mut doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+                doc.overwrite(off, &bytes);
+                doc.save_to(path).map_err(|e| format!("save failed: {e}"))?;
+                Ok(json!({ "written": bytes.len() }).to_string())
+            }
+            "transform" => {
+                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let mut doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+                let len = args
+                    .get("length")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(doc.len().saturating_sub(off));
+                let op = parse_transform(args)?;
+                let mut data = doc.read_range(off, len as usize);
+                transform::apply(&mut data, op);
+                doc.overwrite(off, &data);
+                doc.save_to(path).map_err(|e| format!("save failed: {e}"))?;
+                Ok(json!({ "transformed": data.len() }).to_string())
+            }
+            "patch_create" => {
+                let orig = args.get("original").and_then(|p| p.as_str()).ok_or("missing 'original'")?;
+                let modi = args.get("modified").and_then(|p| p.as_str()).ok_or("missing 'modified'")?;
+                let outp = args.get("output").and_then(|p| p.as_str()).ok_or("missing 'output'")?;
+                let a = std::fs::read(orig).map_err(|e| format!("read original: {e}"))?;
+                let b = std::fs::read(modi).map_err(|e| format!("read modified: {e}"))?;
+                let p = patch::make_ips(&a, &b)?;
+                std::fs::write(outp, &p).map_err(|e| format!("write patch: {e}"))?;
+                Ok(json!({ "patch_bytes": p.len() }).to_string())
+            }
+            "patch_apply" => {
+                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let patch_path = args.get("patch").and_then(|p| p.as_str()).ok_or("missing 'patch'")?;
+                let bytes = std::fs::read(patch_path).map_err(|e| format!("read patch: {e}"))?;
+                let writes = patch::parse_ips(&bytes)?;
+                let mut doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+                for w in &writes {
+                    doc.overwrite(w.offset, &w.data);
+                }
+                doc.save_to(path).map_err(|e| format!("save failed: {e}"))?;
+                Ok(json!({ "records": writes.len() }).to_string())
+            }
+            _ => call_tool(name, args),
+        }
+    }
+}
+
+fn session_id(args: &Value) -> Result<u64, String> {
+    args.get("session")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| "missing 'session'".to_string())
+}
+
+fn parse_hex_arg(args: &Value) -> Result<Vec<u8>, String> {
+    let hex = args.get("hex").and_then(|v| v.as_str()).ok_or("missing 'hex'")?;
+    crate::ops::pattern::parse_hex_pattern(hex)
+}
+
+fn parse_transform(args: &Value) -> Result<transform::Op, String> {
+    let op = args.get("op").and_then(|v| v.as_str()).unwrap_or("");
+    let key = args.get("key").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+    let n = args.get("key").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    Ok(match op.to_lowercase().as_str() {
+        "not" => transform::Op::Not,
+        "xor" => transform::Op::Xor(key),
+        "and" => transform::Op::And(key),
+        "or" => transform::Op::Or(key),
+        "add" => transform::Op::Add(key),
+        "sub" => transform::Op::Sub(key),
+        "rol" => transform::Op::Rol(n),
+        "ror" => transform::Op::Ror(n),
+        "shl" => transform::Op::Shl(n),
+        "shr" => transform::Op::Shr(n),
+        "reverse" => transform::Op::Reverse,
+        "swap" => transform::Op::SwapBytes(args.get("key").and_then(|v| v.as_u64()).unwrap_or(2) as usize),
+        "flipcase" | "flip_case" => transform::Op::FlipCase,
+        other => return Err(format!("unknown transform op: {other}")),
+    })
 }
 
 fn result_response(id: &Value, result: Value) -> Value {
@@ -143,6 +307,41 @@ fn tools_list() -> Value {
             "builtin": {"type":"string","description":"BMP|PNG|ELF|WAV|GIF (case-insensitive substring)"},
             "template": {"type":"string","description":"custom template DSL source (overrides builtin)"},
             "offset": {"type":"integer"} })) },
+
+        // ---- write / session tools ----
+        { "name": "write_bytes", "description": "Overwrite bytes at an offset and save the file.",
+          "inputSchema": path_schema(json!({
+            "offset": {"type":"integer"}, "hex": {"type":"string","description":"bytes as hex, e.g. 'DE AD BE EF'"} })) },
+        { "name": "transform", "description": "Apply a byte transform to a range and save (xor/and/or/add/sub/not/rol/ror/shl/shr/reverse/swap/flipcase).",
+          "inputSchema": path_schema(json!({
+            "offset": {"type":"integer"}, "length": {"type":"integer"},
+            "op": {"type":"string"}, "key": {"type":"integer","description":"key/bits/group for the op"} })) },
+        { "name": "patch_create", "description": "Diff two files into an IPS patch.",
+          "inputSchema": json!({ "type":"object", "required":["original","modified","output"], "properties": {
+            "original": {"type":"string"}, "modified": {"type":"string"}, "output": {"type":"string"} } }) },
+        { "name": "patch_apply", "description": "Apply an IPS patch to a file and save.",
+          "inputSchema": path_schema(json!({ "patch": {"type":"string","description":"path to .ips patch"} })) },
+        { "name": "open", "description": "Open a file as an editing session; returns a session id.",
+          "inputSchema": path_schema(json!({})) },
+        { "name": "session_read", "description": "Hex dump from an open session.",
+          "inputSchema": json!({ "type":"object", "required":["session"], "properties": {
+            "session": {"type":"integer"}, "offset": {"type":"integer"}, "length": {"type":"integer"} } }) },
+        { "name": "session_write", "description": "Overwrite bytes in a session (undoable; not saved until session_save).",
+          "inputSchema": json!({ "type":"object", "required":["session","hex"], "properties": {
+            "session": {"type":"integer"}, "offset": {"type":"integer"}, "hex": {"type":"string"} } }) },
+        { "name": "session_insert", "description": "Insert bytes in a session.",
+          "inputSchema": json!({ "type":"object", "required":["session","hex"], "properties": {
+            "session": {"type":"integer"}, "offset": {"type":"integer"}, "hex": {"type":"string"} } }) },
+        { "name": "session_delete", "description": "Delete bytes in a session.",
+          "inputSchema": json!({ "type":"object", "required":["session","length"], "properties": {
+            "session": {"type":"integer"}, "offset": {"type":"integer"}, "length": {"type":"integer"} } }) },
+        { "name": "session_undo", "description": "Undo the last edit in a session.",
+          "inputSchema": json!({ "type":"object", "required":["session"], "properties": { "session": {"type":"integer"} } }) },
+        { "name": "session_save", "description": "Save a session to disk (its path, or a given 'path').",
+          "inputSchema": json!({ "type":"object", "required":["session"], "properties": {
+            "session": {"type":"integer"}, "path": {"type":"string"} } }) },
+        { "name": "session_close", "description": "Close an editing session.",
+          "inputSchema": json!({ "type":"object", "required":["session"], "properties": { "session": {"type":"integer"} } }) },
     ])
 }
 
@@ -371,19 +570,19 @@ mod tests {
 
     #[test]
     fn initialize_advertises_server() {
-        let resp = handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize"})).unwrap();
+        let resp = Server::new().handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize"})).unwrap();
         assert_eq!(resp["result"]["serverInfo"]["name"], "ganghex");
         assert_eq!(resp["result"]["protocolVersion"], PROTOCOL_VERSION);
     }
 
     #[test]
     fn notifications_get_no_response() {
-        assert!(handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
+        assert!(Server::new().handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
     }
 
     #[test]
     fn tools_list_nonempty() {
-        let resp = handle(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).unwrap();
+        let resp = Server::new().handle(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).unwrap();
         let tools = resp["result"]["tools"].as_array().unwrap();
         assert!(tools.len() >= 10);
         assert!(tools.iter().any(|t| t["name"] == "disassemble"));
@@ -391,14 +590,14 @@ mod tests {
 
     #[test]
     fn unknown_method_errors() {
-        let resp = handle(&json!({"jsonrpc":"2.0","id":3,"method":"bogus"})).unwrap();
+        let resp = Server::new().handle(&json!({"jsonrpc":"2.0","id":3,"method":"bogus"})).unwrap();
         assert_eq!(resp["error"]["code"], -32601);
     }
 
     #[test]
     fn tools_call_checksums() {
         let p = tmpfile(b"abc");
-        let resp = handle(&json!({
+        let resp = Server::new().handle(&json!({
             "jsonrpc":"2.0","id":4,"method":"tools/call",
             "params": {"name":"checksums","arguments":{"path": p.to_str().unwrap(),"algorithms":["sha256","crc32"]}}
         }))
@@ -413,13 +612,13 @@ mod tests {
     #[test]
     fn tools_call_read_hex_and_disasm() {
         let p = tmpfile(&[0x48, 0x31, 0xC0, 0x90, 0xC3]);
-        let hex = handle(&json!({
+        let hex = Server::new().handle(&json!({
             "jsonrpc":"2.0","id":5,"method":"tools/call",
             "params":{"name":"read_hex","arguments":{"path": p.to_str().unwrap(),"length":5}}
         })).unwrap();
         assert!(hex["result"]["content"][0]["text"].as_str().unwrap().contains("48 31 C0"));
 
-        let dis = handle(&json!({
+        let dis = Server::new().handle(&json!({
             "jsonrpc":"2.0","id":6,"method":"tools/call",
             "params":{"name":"disassemble","arguments":{"path": p.to_str().unwrap(),"arch":"x86-64","count":3}}
         })).unwrap();
@@ -430,7 +629,7 @@ mod tests {
 
     #[test]
     fn tool_error_is_reported() {
-        let resp = handle(&json!({
+        let resp = Server::new().handle(&json!({
             "jsonrpc":"2.0","id":7,"method":"tools/call",
             "params":{"name":"read_hex","arguments":{"path":"/nonexistent/xyz"}}
         }))
@@ -441,7 +640,7 @@ mod tests {
     #[test]
     fn search_finds_bytes() {
         let p = tmpfile(b"--needle--needle--");
-        let resp = handle(&json!({
+        let resp = Server::new().handle(&json!({
             "jsonrpc":"2.0","id":8,"method":"tools/call",
             "params":{"name":"search","arguments":{"path": p.to_str().unwrap(),"type":"text","value":"needle"}}
         }))
@@ -450,5 +649,81 @@ mod tests {
         let v: Value = serde_json::from_str(text).unwrap();
         assert_eq!(v["matches"], json!([2, 10]));
         let _ = std::fs::remove_file(&p);
+    }
+
+    fn call(s: &mut Server, name: &str, args: Value) -> Value {
+        let resp = s
+            .handle(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}))
+            .unwrap();
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        serde_json::from_str(text).unwrap_or(Value::String(text.to_string()))
+    }
+
+    #[test]
+    fn session_edit_lifecycle() {
+        let p = tmpfile(b"AAAAAAAA");
+        let mut s = Server::new();
+        // open
+        let opened = call(&mut s, "open", json!({"path": p.to_str().unwrap()}));
+        let id = opened["session"].as_u64().unwrap();
+        assert_eq!(opened["length"], 8);
+        // overwrite 2 bytes at offset 2
+        let w = call(&mut s, "session_write", json!({"session": id, "offset": 2, "hex": "4242"}));
+        assert_eq!(w["written"], 2);
+        // insert grows the doc
+        let ins = call(&mut s, "session_insert", json!({"session": id, "offset": 0, "hex": "FF"}));
+        assert_eq!(ins["length"], 9);
+        // undo the insert
+        let u = call(&mut s, "session_undo", json!({"session": id}));
+        assert_eq!(u["length"], 8);
+        // save and verify on disk
+        call(&mut s, "session_save", json!({"session": id}));
+        let saved = std::fs::read(&p).unwrap();
+        assert_eq!(saved, b"AABBAAAA"); // bytes 2,3 overwritten with 0x42
+        call(&mut s, "session_close", json!({"session": id}));
+        // session is gone now
+        let resp = s.handle(&json!({
+            "jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"session_read","arguments":{"session": id}}
+        })).unwrap();
+        assert_eq!(resp["result"]["isError"], true);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn write_bytes_and_transform_tools() {
+        let p = tmpfile(&[0x00, 0x0F, 0xF0, 0xFF]);
+        let mut s = Server::new();
+        call(&mut s, "write_bytes", json!({"path": p.to_str().unwrap(), "offset": 0, "hex": "AA"}));
+        assert_eq!(std::fs::read(&p).unwrap(), vec![0xAA, 0x0F, 0xF0, 0xFF]);
+        // XOR the whole file with 0xFF
+        call(&mut s, "transform", json!({"path": p.to_str().unwrap(), "op": "xor", "key": 0xFF}));
+        assert_eq!(std::fs::read(&p).unwrap(), vec![0x55, 0xF0, 0x0F, 0x00]);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn patch_create_and_apply_tools() {
+        let orig = tmpfile(b"the quick brown fox");
+        let modi = tmpfile(b"the QUICK brown fox");
+        let patch = tmpfile(b""); // reuse path
+        let mut s = Server::new();
+        let made = call(&mut s, "patch_create", json!({
+            "original": orig.to_str().unwrap(),
+            "modified": modi.to_str().unwrap(),
+            "output": patch.to_str().unwrap(),
+        }));
+        assert!(made["patch_bytes"].as_u64().unwrap() > 8);
+        // apply the patch back onto a copy of the original
+        let target = tmpfile(b"the quick brown fox");
+        let applied = call(&mut s, "patch_apply", json!({
+            "path": target.to_str().unwrap(),
+            "patch": patch.to_str().unwrap(),
+        }));
+        assert!(applied["records"].as_u64().unwrap() >= 1);
+        assert_eq!(std::fs::read(&target).unwrap(), b"the QUICK brown fox");
+        for f in [orig, modi, patch, target] {
+            let _ = std::fs::remove_file(&f);
+        }
     }
 }
