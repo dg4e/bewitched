@@ -468,21 +468,25 @@ pure-core discipline; the fourth required a small engine addition.
 
 - **Disassembly** (`disasm.rs`) is multi-architecture and **entirely pure Rust** —
   the alternative to a C dependency like Capstone. It dispatches by `Arch` across
-  **eleven targets**: x86-16/32/64 (`iced-x86`), ARM A32 / ARM Thumb / AArch64
+  **fourteen targets**: x86-16/32/64 (`iced-x86`), ARM A32 / ARM Thumb / AArch64
   (`yaxpeax-arm`), MIPS little- and big-endian (`yaxpeax-mips`), PowerPC
-  (`ppc750cl`) and RISC-V 32/64 (`raki`). Two decoding shapes cover them all:
+  (`ppc750cl`), RISC-V 32/64 (`raki`), MSP430 (`yaxpeax-msp430`), 6502
+  (`yaxpeax-6502`) and SM83 / Game Boy (`yaxpeax-sm83`). Two decoding shapes
+  cover them all:
 
   - **Fixed-width** (`fixed4`): x86 (variable but handled by iced's own decoder),
     ARM A32, AArch64, MIPS and PowerPC step in 4-byte words. Endianness lives in
     the per-arch closure — MIPS-BE byte-swaps each word before decoding (the
     `yaxpeax-mips` reader is little-endian-only) while the *displayed* raw bytes
     stay as they appear on disk; PowerPC reads big-endian words.
-  - **Variable-width** (`variable`): ARM Thumb and RISC-V decide each
-    instruction's length from its first bytes — Thumb from the top 5 bits of the
-    first halfword (16- vs 32-bit Thumb-2), RISC-V from the low 2 bits (16-bit
-    compressed vs 32-bit) — then advance by exactly that many bytes. Undecodable
-    words become `.inst` / `.word` / `.hword` placeholders so the listing never
-    stalls.
+  - **Variable-width** (`variable`): ARM Thumb, RISC-V, MSP430, 6502 and SM83.
+    RISC-V decides length from the low 2 bits (16-bit compressed vs 32-bit) up
+    front; the yaxpeax decoders (Thumb/MSP430/6502/SM83) instead feed a
+    max-length window and read the decoder's *reported* length back via
+    `LengthedInstruction::len().to_const()`, which is more robust than guessing
+    (it fixed an ARM Thumb-2 edge case the first-halfword heuristic got wrong).
+    Undecodable words become `.inst`/`.word`/`.hword`/`.byte` placeholders so the
+    listing never stalls.
 
   Integrating different decoder ecosystems behind one `Arch` enum is the whole
   point: each crate has its own API (yaxpeax's `Decoder`/`U8Reader` trait dance,
@@ -510,7 +514,11 @@ pure-core discipline; the fourth required a small engine addition.
 - **Live process memory** (`data/process.rs`) is the only feature that touched
   the engine. `ProcessHandle` reads/writes another process and lists its mapped
   regions — macOS via Mach VM (`task_for_pid`, `mach_vm_read_overwrite/write/
-  region`), Linux via `/proc/<pid>/mem` + `maps`, with a graceful stub elsewhere.
+  region`), Linux via `/proc/<pid>/mem` + `maps`, and Windows via `windows-sys`
+  (`OpenProcess` / `Read`/`WriteProcessMemory` / `VirtualQueryEx`, plus a real
+  token-elevation check). The Windows path is compile-verified with
+  `cargo check --target x86_64-pc-windows-gnu` but, lacking a Windows host here,
+  is not runtime-tested — recorded honestly rather than claimed working.
   `ProcessSource` implements `DataSource` over a chosen `[base, len)` window, so
   the *entire* editor — view, scanner, inspector, templates, disassembly — works
   on running memory unchanged; that reuse is the payoff of putting `DataSource`
@@ -553,12 +561,21 @@ pure cores with thin UI.
   it hand-edits and diffs cleanly and is trivially round-trip tested.
 
 - **Scripting** (`script.rs`). Embedded **Rhai** (pure Rust, sandboxed) runs a
-  script against the selection or whole file via a small byte-buffer API
-  (`read/write/len/push/fill/resize`) with captured `print` output. It is bounded
-  by operation/size limits so a runaway loop can't hang the UI, and the buffer is
-  recovered even when the script errors. Results apply through the piece table
-  (undoable) and poke the process when live. This is the "turn the editor into a
-  platform" lever — arbitrary batch transforms without recompiling.
+  script against the selection or whole file via a byte-buffer API
+  (`read/write/len/push/fill/resize/insert/remove/find_byte/find_str/count/sum/
+  hex`) with captured `print` output. It is bounded by operation/size limits so a
+  runaway loop can't hang the UI, and the buffer is recovered even when the script
+  errors. Results apply through the piece table (undoable) and poke the process
+  when live. This is the "turn the editor into a platform" lever — arbitrary batch
+  transforms without recompiling.
+
+- **Multi-cursor** (`app.rs`). Ctrl/Cmd+click adds extra carets; overwrite-mode
+  edits — hex nibbles, text-pane bytes, paste-write — broadcast to every caret,
+  each mirroring the same nibble/byte and advancing (and poking the live process
+  when applicable). It is deliberately overwrite-only: insert/delete would shift
+  the other carets' offsets, so the broadcast clones the caret list, edits the
+  document, then advances the (still-valid) offsets. Extra carets render with a
+  faint highlight and the status bar shows the count.
 
 ## 11. Known limitations and future work
 
@@ -577,22 +594,21 @@ pure cores with thin UI.
 
 ### Still on the list
 
-Almost everything discussed has shipped (live process memory + write-through,
-templates with editable fields, disassembly, byte-map + diff, scripting,
-annotations, loud privilege handling). What remains is either unverifiable in
-this environment or genuinely optional:
+Essentially everything discussed has shipped — live process memory on all three
+desktop OSes (with write-through), 14-architecture disassembly, editable
+templates, scripting, multi-cursor, annotations, byte-map + diff, and loud
+privilege handling. What remains is narrow:
 
-- **Windows process backend.** macOS and Linux are done and tested against our
-  own memory; Windows would use `OpenProcess` + `Read/WriteProcessMemory` +
-  `VirtualQueryEx` (the `windows`/`windows-sys` crate). It is deliberately a stub
-  because there is no Windows target here to compile or test it against —
-  shipping unverifiable platform FFI would be dishonest.
-- **Even more disassembly architectures.** x86-16/32/64, ARM A32/Thumb/AArch64,
-  MIPS (LE/BE), PowerPC and RISC-V 32/64 are done (all pure Rust). SPARC and
-  other long-tail ISAs would need additional decoder crates; the PowerPC backend
-  (`ppc750cl`) is specifically the 750CL flavor, so a broader PPC decoder could
-  replace it later.
-- **Multi-cursor editing.** Several independent carets is mostly a hex-view UI
-  change with fiddly edge cases (simultaneous typing, overlapping edits).
-- **Scripting reach.** The Rhai API is intentionally small (a byte buffer); it
-  could grow document/region/search bindings and a script library.
+- **Windows runtime testing.** The Windows process backend is implemented and
+  **compile-verified** (`cargo check --target x86_64-pc-windows-gnu`), but with no
+  Windows host here it has not been *run*. That gap is recorded honestly rather
+  than papered over.
+- **SPARC / SuperH text.** No pure-Rust SPARC decoder exists, and `yaxpeax-superh`
+  decodes but ships no text formatter — both would need real work (FFI or a
+  hand-written formatter), so they are left out rather than half-done. The
+  PowerPC backend (`ppc750cl`) is specifically the 750CL flavor; a broader PPC
+  decoder could replace it.
+- **Insert-mode multi-cursor.** Multi-cursor is overwrite-only by design;
+  supporting insert/delete across carets needs offset-rebasing after each edit.
+- **Deeper scripting.** The Rhai API could grow document/region/search bindings
+  and a saved-script library on top of the current byte-buffer surface.

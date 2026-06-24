@@ -52,9 +52,10 @@ blocks.
   Windows `FILETIME`, DOS date/time and GUID, with LE/BE toggle.
 - **Live process memory**: open a running process's memory (by PID + region) as
   a live view; hex-view edits **write through to RAM** (status shows ⏺ LIVE).
-  macOS (Mach VM) and Linux (`/proc/<pid>/mem`). ⚠ **Other processes need
-  root / Administrator** (your own PID never does) — the dialog shows a loud
-  banner and your current elevation status.
+  macOS (Mach VM), Linux (`/proc/<pid>/mem`) and Windows
+  (`Read/WriteProcessMemory`). ⚠ **Other processes need root / Administrator**
+  (your own PID never does) — the dialog shows a loud banner and your current
+  elevation status.
 - **Value scanner** (memory/save editing): first-scan for a typed value, then
   refine (equal / changed / unchanged / increased / decreased) as the data
   changes — the "Cheat Engine" workflow — plus "write value to all matches",
@@ -66,10 +67,13 @@ blocks.
   with a `read/write/len/push/fill/resize` byte API and captured output.
 - **Annotations**: bookmarks, regions and free-text notes persist to a
   human-readable `<file>.ghx` sidecar (auto-loaded on reopen).
-- **Disassembly** (multi-arch, pure Rust): x86-16/32/64 (`iced-x86`), ARM A32 /
-  Thumb / AArch64 (`yaxpeax-arm`), MIPS LE/BE (`yaxpeax-mips`), PowerPC
-  (`ppc750cl`) and RISC-V 32/64 (`raki`) — pick the architecture in the
-  disassembly window. No C dependency.
+- **Disassembly** (14 architectures, pure Rust — no C dependency): x86-16/32/64
+  (`iced-x86`), ARM A32 / Thumb / AArch64 (`yaxpeax-arm`), MIPS LE/BE
+  (`yaxpeax-mips`), PowerPC (`ppc750cl`), RISC-V 32/64 (`raki`), MSP430
+  (`yaxpeax-msp430`), 6502 (`yaxpeax-6502`) and SM83/Game Boy (`yaxpeax-sm83`) —
+  pick the architecture in the disassembly window.
+- **Multi-cursor editing**: Ctrl/Cmd+click adds extra carets; overwrite-mode
+  edits and paste broadcast to all of them. Esc clears.
 - **Byte map**: visualize the whole file as a colored image to spot structure;
   click a pixel to jump.
 - **Transforms** on a selection: XOR/AND/OR/ADD/SUB/NOT, rotate, shift,
@@ -104,7 +108,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (171 tests)
+cargo test                          # run the test suite (179 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -137,7 +141,7 @@ src/
     source.rs   DataSource trait + mmap/file/memory sources
     document.rs piece-table, undo/redo, ByteReader trait + Send snapshot
     regions.rs  foldable regions ("data-folds") + offset/row view map
-    process.rs  live process memory (Mach VM / /proc) + ProcessSource
+    process.rs  live process memory (Mach VM / proc / Win32) + ProcessSource
   ops/          feature operations (all unit-tested)
     search.rs   streaming multi-type find / replace
     checksum.rs streaming digests
@@ -153,7 +157,7 @@ src/
     patch.rs    IPS patch create / parse / apply
     diff.rs     detailed binary diff (all differing ranges)
     byteplot.rs byte-as-pixel visualization
-    disasm.rs   multi-arch disasm: x86/ARM/Thumb/AArch64/MIPS/PowerPC/RISC-V (pure Rust)
+    disasm.rs   multi-arch disasm (14 ISAs, pure Rust): x86/ARM/MIPS/PPC/RISC-V/MSP430/6502/SM83
     template.rs binary template DSL + interpreter + built-ins + field encode
     script.rs   sandboxed Rhai scripting over a byte buffer
     sidecar.rs  persistent annotations (.ghx): bookmarks/regions/notes
@@ -166,7 +170,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **171 tests**
+Engine, feature operations and GUI are implemented and covered by **179 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 
