@@ -1,9 +1,11 @@
 //! Model Context Protocol (MCP) server.
 //!
-//! Exposes ganghex's analysis engine as MCP tools so an LLM/agent can inspect
-//! binaries: read bytes, search, compute digests, gather statistics, extract
-//! strings, scan signatures, disassemble (14 architectures), inspect typed
-//! values at an offset, export, and apply binary templates.
+//! Exposes ganghex's engine to an LLM/agent: read bytes, search, digests,
+//! statistics, strings, signatures, disassembly (14 architectures), typed
+//! inspection, export, templates, IPS patches, transforms, and full editing
+//! **sessions** (open/read/write/insert/delete/undo/save) plus headless Rhai
+//! `script` tools. Also serves MCP `resources` (built-in templates, the script
+//! library, and reference lists) and `prompts` (canned analysis recipes).
 //!
 //! Transport is the standard MCP stdio transport: newline-delimited JSON-RPC 2.0
 //! on stdin/stdout. Run with `ganghex --mcp`.
@@ -78,12 +80,37 @@ impl Server {
             &id,
             json!({
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": { "tools": {} },
+                "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
                 "serverInfo": { "name": "ganghex", "version": env!("CARGO_PKG_VERSION") }
             }),
         )),
         "ping" => Some(result_response(&id, json!({}))),
         "tools/list" => Some(result_response(&id, json!({ "tools": tools_list() }))),
+        "resources/list" => Some(result_response(&id, json!({ "resources": resources_list() }))),
+        "resources/read" => {
+            let uri = req
+                .get("params")
+                .and_then(|p| p.get("uri"))
+                .and_then(|u| u.as_str())
+                .unwrap_or("");
+            match read_resource(uri) {
+                Ok(text) => Some(result_response(
+                    &id,
+                    json!({ "contents": [ { "uri": uri, "mimeType": "text/plain", "text": text } ] }),
+                )),
+                Err(e) => Some(error_response(&id, -32602, &e)),
+            }
+        }
+        "prompts/list" => Some(result_response(&id, json!({ "prompts": prompts_list() }))),
+        "prompts/get" => {
+            let params = req.get("params").cloned().unwrap_or(Value::Null);
+            let pname = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let pargs = params.get("arguments").cloned().unwrap_or(json!({}));
+            match get_prompt(pname, &pargs) {
+                Ok(v) => Some(result_response(&id, v)),
+                Err(e) => Some(error_response(&id, -32602, &e)),
+            }
+        }
         "tools/call" => {
             let params = req.get("params").cloned().unwrap_or(Value::Null);
             let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
@@ -320,6 +347,111 @@ fn parse_transform(args: &Value) -> Result<transform::Op, String> {
 
 fn result_response(id: &Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
+}
+
+// ---- resources ----
+
+fn resources_list() -> Value {
+    let mut out: Vec<Value> = Vec::new();
+    for (name, _) in template::BUILTINS {
+        out.push(json!({
+            "uri": format!("ganghex://templates/{name}"),
+            "name": format!("template: {name}"),
+            "description": "built-in binary template (DSL source)",
+            "mimeType": "text/plain"
+        }));
+    }
+    for (name, _) in crate::ops::script::LIBRARY {
+        out.push(json!({
+            "uri": format!("ganghex://scripts/{name}"),
+            "name": format!("script: {name}"),
+            "description": "built-in Rhai script (source)",
+            "mimeType": "text/plain"
+        }));
+    }
+    for r in ["architectures", "formats", "checksums"] {
+        out.push(json!({
+            "uri": format!("ganghex://reference/{r}"),
+            "name": format!("reference: {r}"),
+            "description": "names accepted by the corresponding tools",
+            "mimeType": "text/plain"
+        }));
+    }
+    Value::Array(out)
+}
+
+fn read_resource(uri: &str) -> Result<String, String> {
+    if let Some(name) = uri.strip_prefix("ganghex://templates/") {
+        return template::BUILTINS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, s)| s.to_string())
+            .ok_or_else(|| format!("no template '{name}'"));
+    }
+    if let Some(name) = uri.strip_prefix("ganghex://scripts/") {
+        return crate::ops::script::LIBRARY
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, s)| s.to_string())
+            .ok_or_else(|| format!("no script '{name}'"));
+    }
+    match uri {
+        "ganghex://reference/architectures" => Ok(disasm::Arch::ALL
+            .iter()
+            .map(|a| a.label())
+            .collect::<Vec<_>>()
+            .join("\n")),
+        "ganghex://reference/formats" => Ok(export::Format::ALL
+            .iter()
+            .map(|f| format!("{} (.{})", f.name(), f.extension()))
+            .collect::<Vec<_>>()
+            .join("\n")),
+        "ganghex://reference/checksums" => Ok(checksum::Algo::ALL
+            .iter()
+            .map(|a| a.name())
+            .collect::<Vec<_>>()
+            .join("\n")),
+        _ => Err(format!("unknown resource: {uri}")),
+    }
+}
+
+// ---- prompts ----
+
+fn prompts_list() -> Value {
+    let path_arg = json!([{ "name": "path", "description": "file to analyze", "required": true }]);
+    json!([
+        { "name": "identify-file", "description": "Identify a file's format and structure.", "arguments": path_arg },
+        { "name": "analyze-binary", "description": "Full triage of an unknown binary.", "arguments": path_arg },
+        { "name": "find-secrets", "description": "Look for embedded strings, keys and crypto constants.", "arguments": path_arg },
+    ])
+}
+
+fn get_prompt(name: &str, args: &Value) -> Result<Value, String> {
+    let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("<path>");
+    let text = match name {
+        "identify-file" => format!(
+            "Identify the file at `{path}`. Call the `signatures` tool to detect magic numbers, \
+             `statistics` for entropy, and `read_hex {{path, offset:0, length:64}}` to inspect the \
+             header. If it matches a known container, run `apply_template` with the matching \
+             built-in. Report the format, key header fields, and your confidence."
+        ),
+        "analyze-binary" => format!(
+            "Triage the binary at `{path}`. Steps: (1) `signatures` to spot the format and embedded \
+             blobs; (2) `statistics` for entropy/packing; (3) `strings` for clues; (4) if it is an \
+             executable, `disassemble {{path, offset, count, arch}}` at the entry. Summarize what it \
+             is, notable regions, and anything suspicious."
+        ),
+        "find-secrets" => format!(
+            "Search `{path}` for sensitive material. Use `strings` (look for URLs, paths, keys, \
+             base64), and `signatures` (the crypto-constant detector flags AES S-boxes and SHA-256 \
+             constants). Report offsets and what you found."
+        ),
+        other => return Err(format!("unknown prompt: {other}")),
+    };
+    Ok(json!({
+        "description": format!("ganghex: {name}"),
+        "messages": [ { "role": "user", "content": { "type": "text", "text": text } } ]
+    }))
 }
 
 fn error_response(id: &Value, code: i64, message: &str) -> Value {
@@ -667,6 +799,57 @@ mod tests {
         let tools = resp["result"]["tools"].as_array().unwrap();
         assert!(tools.len() >= 10);
         assert!(tools.iter().any(|t| t["name"] == "disassemble"));
+    }
+
+    #[test]
+    fn initialize_advertises_resources_and_prompts() {
+        let resp = Server::new().handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize"})).unwrap();
+        let caps = &resp["result"]["capabilities"];
+        assert!(caps.get("resources").is_some());
+        assert!(caps.get("prompts").is_some());
+    }
+
+    #[test]
+    fn resources_list_and_read() {
+        let mut s = Server::new();
+        let list = s.handle(&json!({"jsonrpc":"2.0","id":1,"method":"resources/list"})).unwrap();
+        let res = list["result"]["resources"].as_array().unwrap();
+        assert!(res.iter().any(|r| r["uri"] == "ganghex://reference/architectures"));
+        // read the template PNG source
+        let read = s.handle(&json!({
+            "jsonrpc":"2.0","id":2,"method":"resources/read",
+            "params":{"uri":"ganghex://templates/PNG image"}
+        })).unwrap();
+        let text = read["result"]["contents"][0]["text"].as_str().unwrap();
+        assert!(text.contains("ihdr_type"));
+        // read the arch reference
+        let arch = s.handle(&json!({
+            "jsonrpc":"2.0","id":3,"method":"resources/read",
+            "params":{"uri":"ganghex://reference/architectures"}
+        })).unwrap();
+        assert!(arch["result"]["contents"][0]["text"].as_str().unwrap().contains("ARM64"));
+    }
+
+    #[test]
+    fn resources_read_unknown_errors() {
+        let resp = Server::new().handle(&json!({
+            "jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"ganghex://nope"}
+        })).unwrap();
+        assert_eq!(resp["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn prompts_list_and_get() {
+        let mut s = Server::new();
+        let list = s.handle(&json!({"jsonrpc":"2.0","id":1,"method":"prompts/list"})).unwrap();
+        assert!(list["result"]["prompts"].as_array().unwrap().iter().any(|p| p["name"] == "analyze-binary"));
+        let got = s.handle(&json!({
+            "jsonrpc":"2.0","id":2,"method":"prompts/get",
+            "params":{"name":"identify-file","arguments":{"path":"/tmp/x.bin"}}
+        })).unwrap();
+        let text = got["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("/tmp/x.bin"));
+        assert!(text.contains("signatures"));
     }
 
     #[test]
