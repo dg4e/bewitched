@@ -121,6 +121,93 @@ pub fn run(src: &str, data: &mut Vec<u8>) -> Result<String, String> {
             b.borrow().iter().map(|&x| x as i64).sum::<i64>()
         });
     }
+    // ---- typed multi-byte accessors ----
+    fn rd_uint(bb: &[u8], i: usize, n: usize, le: bool) -> Option<u64> {
+        if i + n > bb.len() {
+            return None;
+        }
+        let mut v = 0u64;
+        if le {
+            for k in (0..n).rev() {
+                v = (v << 8) | bb[i + k] as u64;
+            }
+        } else {
+            for k in 0..n {
+                v = (v << 8) | bb[i + k] as u64;
+            }
+        }
+        Some(v)
+    }
+    fn wr_uint(bb: &mut [u8], i: usize, n: usize, le: bool, v: u64) {
+        if i + n > bb.len() {
+            return;
+        }
+        for k in 0..n {
+            let shift = if le { k } else { n - 1 - k } * 8;
+            bb[i + k] = (v >> shift) as u8;
+        }
+    }
+    fn sign_ext(v: u64, n: usize) -> i64 {
+        let s = 64 - n * 8;
+        ((v << s) as i64) >> s
+    }
+    for (name, n, signed) in [
+        ("read_u16", 2, false),
+        ("read_u32", 4, false),
+        ("read_u64", 8, false),
+        ("read_i16", 2, true),
+        ("read_i32", 4, true),
+        ("read_i64", 8, true),
+    ] {
+        let b = buf.clone();
+        engine.register_fn(name, move |i: i64, le: bool| {
+            match rd_uint(&b.borrow(), i.max(0) as usize, n, le) {
+                Some(v) if signed => sign_ext(v, n),
+                Some(v) => v as i64,
+                None => 0,
+            }
+        });
+    }
+    for (name, n) in [("write_u16", 2), ("write_u32", 4), ("write_u64", 8)] {
+        let b = buf.clone();
+        engine.register_fn(name, move |i: i64, v: i64, le: bool| {
+            wr_uint(&mut b.borrow_mut(), i.max(0) as usize, n, le, v as u64);
+        });
+    }
+    {
+        let b = buf.clone();
+        engine.register_fn("read_f32", move |i: i64, le: bool| {
+            rd_uint(&b.borrow(), i.max(0) as usize, 4, le)
+                .map(|v| f32::from_bits(v as u32) as f64)
+                .unwrap_or(0.0)
+        });
+    }
+    {
+        let b = buf.clone();
+        engine.register_fn("read_f64", move |i: i64, le: bool| {
+            rd_uint(&b.borrow(), i.max(0) as usize, 8, le)
+                .map(f64::from_bits)
+                .unwrap_or(0.0)
+        });
+    }
+    {
+        let b = buf.clone();
+        engine.register_fn("crc32", move || {
+            crc32fast::hash(&b.borrow()) as i64
+        });
+    }
+    {
+        let b = buf.clone();
+        engine.register_fn("to_upper", move || {
+            b.borrow_mut().iter_mut().for_each(|x| x.make_ascii_uppercase());
+        });
+    }
+    {
+        let b = buf.clone();
+        engine.register_fn("to_lower", move || {
+            b.borrow_mut().iter_mut().for_each(|x| x.make_ascii_lowercase());
+        });
+    }
     {
         let b = buf.clone();
         // hex dump of a range, for printing
@@ -263,6 +350,41 @@ mod tests {
         let mut data = vec![1u8, 2, 3];
         let out = run(r#"print(find_byte(0x99, 0)); print(find_str("zzz"));"#, &mut data).unwrap();
         assert_eq!(out.lines().collect::<Vec<_>>(), vec!["-1", "-1"]);
+    }
+
+    #[test]
+    fn typed_read_write() {
+        let mut data = vec![0u8; 8];
+        // write 0x1234 LE at 0, read it back; write a u32 BE at 4
+        let out = run(
+            r#"write_u16(0, 0x1234, true); print(read_u16(0, true)); write_u32(4, 0xDEADBEEF, false); print(read_u32(4, false));"#,
+            &mut data,
+        )
+        .unwrap();
+        assert_eq!(data[0], 0x34);
+        assert_eq!(data[1], 0x12);
+        assert_eq!(&data[4..8], &[0xDE, 0xAD, 0xBE, 0xEF]);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "4660"); // 0x1234
+        assert_eq!(lines[1], "3735928559"); // 0xDEADBEEF
+    }
+
+    #[test]
+    fn signed_read() {
+        let mut data = vec![0xFF, 0xFF, 0xFF, 0xFF];
+        let out = run("print(read_i16(0, true)); print(read_u16(0, true));", &mut data).unwrap();
+        assert_eq!(out.lines().collect::<Vec<_>>(), vec!["-1", "65535"]);
+    }
+
+    #[test]
+    fn crc32_and_case() {
+        let mut data = b"Hello".to_vec();
+        let out = run("print(crc32()); to_lower(); print(crc32());", &mut data).unwrap();
+        assert_eq!(data, b"hello");
+        let lines: Vec<&str> = out.lines().collect();
+        // CRC32 of "Hello" = 0xF7D18982 = 4157704578
+        assert_eq!(lines[0], "4157704578");
+        assert_ne!(lines[0], lines[1]); // changed after lowercasing
     }
 
     #[test]
