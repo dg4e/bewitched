@@ -29,6 +29,52 @@ impl MemRegion {
     }
 }
 
+/// True if the editor is running with elevated privileges (root / Administrator).
+/// Touching *another* process's memory generally requires this.
+pub fn is_elevated() -> bool {
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn geteuid() -> u32;
+        }
+        unsafe { geteuid() == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// Platform-specific, human-readable guidance for gaining the privilege needed
+/// to read/write another process's memory.
+pub fn privilege_note() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "macOS: run ganghex as root (sudo), or code-sign it with the \
+         com.apple.security.cs.debugger / get-task-allow entitlement. \
+         System Integrity Protection blocks Apple/system processes regardless."
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "Linux: run ganghex as root (sudo), or grant CAP_SYS_PTRACE / set \
+         /proc/sys/kernel/yama/ptrace_scope=0 for non-root attaching."
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "Windows: run ganghex as Administrator (SeDebugPrivilege) to open other \
+         processes."
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        "Reading another process's memory requires elevated privileges."
+    }
+}
+
+/// Process id of the editor itself — always openable without privileges.
+pub fn own_pid() -> u32 {
+    std::process::id()
+}
+
 // =============================== macOS =====================================
 #[cfg(target_os = "macos")]
 mod imp {
@@ -53,11 +99,17 @@ mod imp {
 
         pub fn open(pid: u32) -> io::Result<Self> {
             let mut task: mach_port_t = 0;
+            if pid == super::own_pid() {
+                return Self::open_self();
+            }
             let kr = unsafe { task_for_pid(mach_task_self(), pid as i32, &mut task) };
             if kr != KERN_SUCCESS {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!("task_for_pid({pid}) failed (kr={kr}); needs root or entitlement"),
+                    format!(
+                        "task_for_pid({pid}) failed (kr={kr}) — administrator/root required. {}",
+                        super::privilege_note()
+                    ),
                 ));
             }
             Ok(Self { task })
@@ -171,7 +223,20 @@ mod imp {
                 .read(true)
                 .write(true)
                 .open(format!("/proc/{pid}/mem"))
-                .or_else(|_| File::open(format!("/proc/{pid}/mem")))?;
+                .or_else(|_| File::open(format!("/proc/{pid}/mem")))
+                .map_err(|e| {
+                    if e.kind() == io::ErrorKind::PermissionDenied && pid != super::own_pid() {
+                        io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            format!(
+                                "cannot open /proc/{pid}/mem — administrator/root required. {}",
+                                super::privilege_note()
+                            ),
+                        )
+                    } else {
+                        e
+                    }
+                })?;
             Ok(Self { pid, mem })
         }
 
@@ -337,6 +402,17 @@ mod tests {
         assert_eq!(n, 4);
         assert_eq!(got, marker[4..8]);
         std::hint::black_box(&marker);
+    }
+
+    #[test]
+    fn privilege_helpers() {
+        // own PID always opens without privileges, regardless of elevation
+        assert!(ProcessHandle::open(own_pid()).is_ok());
+        // guidance is non-empty and mentions elevation
+        let note = privilege_note().to_lowercase();
+        assert!(note.contains("root") || note.contains("administrator"));
+        // is_elevated returns without panicking (value depends on how tests run)
+        let _ = is_elevated();
     }
 
     #[test]

@@ -9,7 +9,7 @@ use egui::{Key, Sense};
 use crate::data::{Document, MemRegion, ProcessHandle, ProcessSource, Region, RowItem, ViewMap};
 use crate::ops::{
     byteplot, checksum, diff, disasm, export, fileops, inspect, patch, pattern, scan, search,
-    signatures, stats, strings, template, transform, Progress,
+    sidecar, signatures, stats, strings, template, transform, Progress,
 };
 
 use super::charset::Charset;
@@ -322,6 +322,9 @@ pub struct App {
     template: TemplateState,
     process_ui: ProcessUiState,
     process_target: Option<ProcTarget>,
+    notes: Vec<sidecar::Note>,
+    notes_open: bool,
+    note_input: String,
     inspector_open: bool,
     inspector_le: bool,
     regions_open: bool,
@@ -389,6 +392,9 @@ impl App {
                 ..Default::default()
             },
             process_target: None,
+            notes: Vec::new(),
+            notes_open: false,
+            note_input: String::new(),
             inspector_open: true,
             inspector_le: true,
             regions_open: false,
@@ -410,6 +416,7 @@ impl App {
                 self.doc = d;
                 self.reset_cursor();
                 self.status = format!("opened {} ({})", path.display(), human(self.doc.len()));
+                self.autoload_annotations();
             }
             Err(e) => self.status = format!("open failed: {e}"),
         }
@@ -446,8 +453,92 @@ impl App {
         self.nibble = 0;
         self.sel_anchor = None;
         self.regions.clear();
+        self.notes.clear();
+        self.bookmarks = [None; 10];
         self.process_target = None;
         self.scroll_to_cursor = true;
+    }
+
+    // ---- annotations sidecar ----
+
+    fn current_sidecar(&self) -> sidecar::Sidecar {
+        sidecar::Sidecar {
+            bookmarks: self.bookmarks,
+            regions: self.regions.clone(),
+            notes: self.notes.clone(),
+        }
+    }
+
+    fn apply_sidecar(&mut self, sc: sidecar::Sidecar) {
+        self.bookmarks = sc.bookmarks;
+        self.regions = sc.regions;
+        self.notes = sc.notes;
+    }
+
+    /// Save annotations to `<doc>.ghx` (or prompt if the doc is unsaved).
+    fn save_annotations(&mut self) {
+        let path = match &self.doc.path {
+            Some(p) => sidecar::sidecar_path(p),
+            None => match rfd::FileDialog::new().add_filter("ganghex", &["ghx"]).save_file() {
+                Some(p) => p,
+                None => return,
+            },
+        };
+        let text = sidecar::serialize(&self.current_sidecar());
+        match std::fs::write(&path, text) {
+            Ok(()) => self.status = format!("saved annotations to {}", path.display()),
+            Err(e) => self.status = format!("save failed: {e}"),
+        }
+    }
+
+    fn load_annotations_from(&mut self, path: &std::path::Path) -> bool {
+        match std::fs::read_to_string(path) {
+            Ok(text) => match sidecar::parse(&text) {
+                Ok(sc) => {
+                    self.apply_sidecar(sc);
+                    true
+                }
+                Err(e) => {
+                    self.status = format!("annotations: {e}");
+                    false
+                }
+            },
+            Err(_) => false,
+        }
+    }
+
+    fn load_annotations_dialog(&mut self) {
+        if let Some(p) = rfd::FileDialog::new().add_filter("ganghex", &["ghx"]).pick_file() {
+            if self.load_annotations_from(&p) {
+                self.status = format!("loaded annotations from {}", p.display());
+            }
+        }
+    }
+
+    /// Auto-load a sibling `<doc>.ghx` if present (called after opening a file).
+    fn autoload_annotations(&mut self) {
+        if let Some(p) = self.doc.path.clone() {
+            let side = sidecar::sidecar_path(&p);
+            if side.exists() && self.load_annotations_from(&side) {
+                self.status = format!("{} — loaded annotations", self.status);
+            }
+        }
+    }
+
+    fn add_note(&mut self) {
+        let (offset, len) = self
+            .selection_range()
+            .map(|(s, e)| (s, e - s))
+            .unwrap_or((self.cursor, 1));
+        let text = std::mem::take(&mut self.note_input);
+        if text.trim().is_empty() {
+            self.status = "type note text first".into();
+            self.note_input = text;
+            return;
+        }
+        self.notes.push(sidecar::Note { offset, len, text });
+        self.notes.sort_by_key(|n| n.offset);
+        self.status = "note added".into();
     }
 
     // ---- regions / data-folds ----

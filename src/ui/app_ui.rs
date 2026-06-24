@@ -24,6 +24,7 @@ impl eframe::App for App {
         self.disasm_window(ctx);
         self.template_window(ctx);
         self.process_window(ctx);
+        self.notes_window(ctx);
         self.regions_window(ctx);
         self.about_window(ctx);
         self.progress_window(ctx);
@@ -95,6 +96,15 @@ impl App {
                 }
                 if ui.button("Apply IPS patch…").clicked() {
                     self.apply_ips();
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Save annotations (.ghx)").clicked() {
+                    self.save_annotations();
+                    ui.close_menu();
+                }
+                if ui.button("Load annotations…").clicked() {
+                    self.load_annotations_dialog();
                     ui.close_menu();
                 }
                 ui.separator();
@@ -207,6 +217,10 @@ impl App {
                 }
                 if ui.button("Regions…").clicked() {
                     self.regions_open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Notes / annotations…").clicked() {
+                    self.notes_open = true;
                     ui.close_menu();
                 }
             });
@@ -1702,15 +1716,45 @@ impl App {
             .resizable(true)
             .default_width(520.0)
             .show(ctx, |ui| {
-                ui.label(
-                    egui::RichText::new(
-                        "View and edit a running process's memory live. Other processes need \
-                         root / task_for_pid (macOS) or ptrace (Linux) permission; your own \
-                         PID always works.",
-                    )
-                    .small()
-                    .color(theme::GREEN_DIM),
-                );
+                // Loud, unmissable privilege banner.
+                let elevated = crate::data::is_elevated();
+                let own = crate::data::own_pid();
+                egui::Frame::none()
+                    .fill(theme::BG_ALT)
+                    .stroke(egui::Stroke::new(1.0, theme::RED))
+                    .inner_margin(8.0)
+                    .rounding(2.0)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("⚠  ADMINISTRATOR / ROOT REQUIRED")
+                                .color(theme::RED)
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                "Reading or writing ANOTHER process's memory needs elevated \
+                                 privileges. Your own PID works without them.",
+                            )
+                            .color(theme::AMBER),
+                        );
+                        ui.label(
+                            egui::RichText::new(crate::data::privilege_note())
+                                .small()
+                                .color(theme::GREEN_DIM),
+                        );
+                        let status = if elevated {
+                            egui::RichText::new("● running ELEVATED — you can attach to other processes")
+                                .color(theme::GREEN)
+                        } else {
+                            egui::RichText::new(format!(
+                                "● running UNPRIVILEGED — only your own PID ({own}) is openable; \
+                                 relaunch with sudo / as Administrator for others"
+                            ))
+                            .color(theme::RED)
+                        };
+                        ui.label(status);
+                    });
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label("PID:");
                     ui.add(egui::TextEdit::singleline(&mut self.process_ui.pid).desired_width(80.0));
@@ -1773,6 +1817,78 @@ impl App {
             self.process_ui.len = format!("{}", size.min(1 << 24)); // cap default to 16 MiB
         }
         self.process_ui.open = open;
+    }
+
+    fn notes_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.notes_open;
+        let mut jump: Option<u64> = None;
+        let mut remove: Option<usize> = None;
+        egui::Window::new("Notes / annotations")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Note:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.note_input)
+                            .desired_width(280.0)
+                            .hint_text("text…"),
+                    );
+                    let target = self
+                        .selection_range()
+                        .map(|(s, e)| format!("{:#X}..{:#X}", s, e))
+                        .unwrap_or_else(|| format!("@ {:#X}", self.cursor));
+                    if ui.button(format!("Add {target}")).clicked() {
+                        self.add_note();
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "notes are saved to <file>.ghx via File ▸ Save annotations, and \
+                         auto-loaded when you reopen the file",
+                    )
+                    .small()
+                    .color(theme::GREEN_DIM),
+                );
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    egui::Grid::new("notes_grid").num_columns(4).striped(true).show(ui, |ui| {
+                        ui.label(egui::RichText::new("offset").color(theme::ADDR));
+                        ui.label(egui::RichText::new("len").color(theme::ADDR));
+                        ui.label(egui::RichText::new("note").color(theme::ADDR));
+                        ui.label("");
+                        ui.end_row();
+                        for (i, n) in self.notes.iter().enumerate() {
+                            if ui
+                                .add(egui::Label::new(
+                                    egui::RichText::new(format!("{:#010X}", n.offset))
+                                        .color(theme::GREEN),
+                                ).sense(egui::Sense::click()))
+                                .clicked()
+                            {
+                                jump = Some(n.offset);
+                            }
+                            ui.label(egui::RichText::new(format!("{}", n.len)).monospace());
+                            ui.label(egui::RichText::new(&n.text));
+                            if ui.small_button("✕").clicked() {
+                                remove = Some(i);
+                            }
+                            ui.end_row();
+                        }
+                    });
+                });
+                if self.notes.is_empty() {
+                    ui.label(egui::RichText::new("no notes yet").color(theme::GREEN_DIM));
+                }
+            });
+        if let Some(i) = remove {
+            self.notes.remove(i);
+        }
+        if let Some(off) = jump {
+            self.set_cursor(off, false);
+        }
+        self.notes_open = open;
     }
 
     fn about_window(&mut self, ctx: &egui::Context) {
