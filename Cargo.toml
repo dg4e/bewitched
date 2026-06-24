@@ -23,6 +23,7 @@ crc32fast = "1.4"
 crc = "3.2"
 adler = "1.0"
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "nasm"] }
+rhai = "1.19"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 mach2 = "0.4"

@@ -14,6 +14,7 @@ pub mod inspect;
 pub mod patch;
 pub mod pattern;
 pub mod scan;
+pub mod script;
 pub mod search;
 pub mod sidecar;
 pub mod signatures;

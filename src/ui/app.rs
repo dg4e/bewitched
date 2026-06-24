@@ -8,8 +8,8 @@ use egui::{Key, Sense};
 
 use crate::data::{Document, MemRegion, ProcessHandle, ProcessSource, Region, RowItem, ViewMap};
 use crate::ops::{
-    byteplot, checksum, diff, disasm, export, fileops, inspect, patch, pattern, scan, search,
-    sidecar, signatures, stats, strings, template, transform, Progress,
+    byteplot, checksum, diff, disasm, export, fileops, inspect, patch, pattern, scan, script,
+    search, sidecar, signatures, stats, strings, template, transform, Progress,
 };
 
 use super::charset::Charset;
@@ -136,6 +136,24 @@ struct DiffState {
     other: Option<PathBuf>,
     ranges: Vec<diff::DiffRange>,
     status: String,
+}
+
+struct ScriptState {
+    open: bool,
+    src: String,
+    output: String,
+    whole_file: bool,
+}
+
+impl Default for ScriptState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            src: "// Rhai: read(i), write(i,v), len(), push(v), fill(s,n,v), resize(n,v)\n// XOR the selection (or whole file) with 0x42:\nfor i in 0..len() {\n    write(i, read(i) ^ 0x42);\n}\n".into(),
+            output: String::new(),
+            whole_file: false,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -324,6 +342,7 @@ pub struct App {
     diff: DiffState,
     disasm: DisasmState,
     template: TemplateState,
+    script: ScriptState,
     process_ui: ProcessUiState,
     process_target: Option<ProcTarget>,
     notes: Vec<sidecar::Note>,
@@ -391,6 +410,7 @@ impl App {
             diff: DiffState::default(),
             disasm: DisasmState::default(),
             template: TemplateState::default(),
+            script: ScriptState::default(),
             process_ui: ProcessUiState {
                 len: "4096".into(),
                 ..Default::default()
@@ -885,6 +905,29 @@ impl App {
         match meta.handle.write(meta.base + s, &bytes) {
             Ok(n) => self.status = format!("poked {n} byte(s) to process at {:#X}", meta.base + s),
             Err(err) => self.status = format!("poke failed: {err}"),
+        }
+    }
+
+    // ---- scripting ----
+
+    fn run_script(&mut self) {
+        let (off, len) = self.scope(self.script.whole_file);
+        let mut data = self.doc.read_range(off, len as usize);
+        let orig = data.len() as u64;
+        match script::run(&self.script.src, &mut data) {
+            Ok(log) => {
+                self.doc.replace(off, orig, &data);
+                if let Some(meta) = &self.process_target {
+                    let _ = meta.handle.write(meta.base + off, &data);
+                }
+                self.script.output = if log.trim().is_empty() {
+                    format!("ok — wrote {} byte(s)", data.len())
+                } else {
+                    log
+                };
+                self.scroll_to_cursor = true;
+            }
+            Err(e) => self.script.output = format!("error: {e}"),
         }
     }
 

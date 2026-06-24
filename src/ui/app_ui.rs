@@ -23,6 +23,7 @@ impl eframe::App for App {
         self.diff_window(ctx);
         self.disasm_window(ctx);
         self.template_window(ctx);
+        self.script_window(ctx);
         self.process_window(ctx);
         self.notes_window(ctx);
         self.regions_window(ctx);
@@ -286,6 +287,10 @@ impl App {
                 }
                 if ui.button("Binary template (structure view)…").clicked() {
                     self.template.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Script (Rhai)…").clicked() {
+                    self.script.open = true;
                     ui.close_menu();
                 }
                 ui.separator();
@@ -1761,6 +1766,53 @@ impl App {
             self.set_cursor(off, false);
         }
         self.template.open = open;
+    }
+
+    fn script_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.script.open;
+        egui::Window::new("Script (Rhai)")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Run").clicked() {
+                        self.run_script();
+                    }
+                    ui.checkbox(&mut self.script.whole_file, "Whole file (else selection)");
+                    ui.label(
+                        egui::RichText::new("sandboxed; edits are undoable")
+                            .small()
+                            .color(theme::GREEN_DIM),
+                    );
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(260.0).id_salt("script_src").show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.script.src)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_rows(12)
+                            .desired_width(f32::INFINITY)
+                            .code_editor(),
+                    );
+                });
+                if !self.script.output.is_empty() {
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new("output")
+                            .small()
+                            .color(theme::GREEN_DIM),
+                    );
+                    egui::ScrollArea::vertical().max_height(140.0).id_salt("script_out").show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.script.output.as_str())
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+                }
+            });
+        self.script.open = open;
     }
 
     fn process_window(&mut self, ctx: &egui::Context) {
