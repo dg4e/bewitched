@@ -569,15 +569,49 @@ pure cores with thin UI.
   when live. This is the "turn the editor into a platform" lever — arbitrary batch
   transforms without recompiling.
 
-- **Multi-cursor** (`app.rs`). Ctrl/Cmd+click adds extra carets; overwrite-mode
-  edits — hex nibbles, text-pane bytes, paste-write — broadcast to every caret,
-  each mirroring the same nibble/byte and advancing (and poking the live process
-  when applicable). It is deliberately overwrite-only: insert/delete would shift
-  the other carets' offsets, so the broadcast clones the caret list, edits the
-  document, then advances the (still-valid) offsets. Extra carets render with a
-  faint highlight and the status bar shows the count.
+- **Multi-cursor** (`app.rs`). Ctrl/Cmd+click adds extra carets; edits — hex
+  nibbles, text-pane bytes, paste — broadcast to every caret, each mirroring the
+  same nibble/byte and advancing (and poking the live process when applicable).
+  Overwrite mode is trivial (lengths don't change). **Insert mode** needs care:
+  inserting at several carets shifts the others, so the broadcast applies inserts
+  high-offset-first (keeping lower offsets valid) and then rebases every caret via
+  a pure, unit-tested `rebase_inserts` — each caret moves right by every insertion
+  at a lower offset plus its own. Extra carets render with a faint highlight and
+  the status bar shows the count.
 
-## 11. Known limitations and future work
+## 11. The MCP server
+
+`mcp.rs` exposes ganghex's engine over the **Model Context Protocol** so an
+LLM/agent can analyze binaries — the inverse of the GUI: instead of a human
+driving the tools, a model does.
+
+- **Transport.** The MCP stdio transport is newline-delimited JSON-RPC 2.0 (one
+  complete message per line — not the LSP-style `Content-Length` framing). `serve`
+  is a plain `stdin.lines()` loop: parse, dispatch, write a line, flush. The only
+  new dependency is `serde_json` (pure Rust; `serde` was already in the tree).
+
+- **Why a `--mcp` flag, not a second binary.** A separate bin in the same crate
+  would still link the whole library (egui included), so it buys nothing. Instead
+  `ui::run` checks for `--mcp` and calls `crate::mcp::serve()` *before* creating a
+  window — the server is headless and never touches the GUI.
+
+- **Statelessness is the design.** Every tool takes a file/device `path`, opens a
+  `Document` (mmap), runs an existing `ops` function against it, and returns JSON
+  text. There is no session or open-document state to manage, which keeps the
+  server trivial and each call independent — and it works precisely because the
+  feature operations were written against `&dyn ByteReader` from the start, not
+  against GUI state. The ten tools (`read_hex`, `checksums`, `statistics`,
+  `search`, `strings`, `signatures`, `disassemble`, `inspect`, `export`,
+  `apply_template`) are thin adapters over `ops`.
+
+- **Testability.** `handle(&Value) -> Option<Value>` is a pure function of the
+  request (notifications return `None`), so the protocol is unit-tested with
+  literal JSON (initialize / tools-list / tools-call / errors), and several tools
+  are exercised end-to-end against temp files — plus a real piped stdio session as
+  a smoke test. This mirrors the whole codebase's bias: put the logic in pure,
+  testable functions and keep the I/O shell thin.
+
+## 12. Known limitations and future work
 
 - **Folded cursor.** Navigation stays in offset space, so the cursor can sit
   inside a collapsed region (invisible until unfolded). A future version could
@@ -608,7 +642,12 @@ privilege handling. What remains is narrow:
   hand-written formatter), so they are left out rather than half-done. The
   PowerPC backend (`ppc750cl`) is specifically the 750CL flavor; a broader PPC
   decoder could replace it.
-- **Insert-mode multi-cursor.** Multi-cursor is overwrite-only by design;
-  supporting insert/delete across carets needs offset-rebasing after each edit.
-- **Deeper scripting.** The Rhai API could grow document/region/search bindings
-  and a saved-script library on top of the current byte-buffer surface.
+- **Multi-cursor delete.** Insert and overwrite broadcast to all carets; a
+  symmetric multi-caret backspace/delete (with the mirror-image offset rebasing)
+  is a small follow-up.
+- **MCP write tools / sessions.** The MCP server is read-only and stateless by
+  design (each call opens a path). Mutating tools (patch, transform, write) and an
+  open-document session would be a natural extension.
+- **Script document bindings.** The Rhai API operates on the materialized
+  selection/buffer; document/region/cursor bindings and a saved-script library
+  would let scripts reach beyond the current scope.

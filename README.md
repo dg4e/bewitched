@@ -64,7 +64,13 @@ blocks.
   click-to-jump fields you can **edit by value** and write back; built-ins for
   BMP/PNG/ELF/WAV/GIF.
 - **Scripting (Rhai)**: run a sandboxed script over the selection/whole file
-  with a `read/write/len/push/fill/resize` byte API and captured output.
+  with a rich byte API — `read/write`, typed `read_u16…u64`/`i16…i64`/`f32/f64`
+  and `write_*` (with endianness), `insert/remove`, `find_byte/find_str`,
+  `count/sum/crc32/hex`, `to_upper/to_lower` — and captured output.
+- **MCP server**: `ganghex --mcp` runs a Model Context Protocol server (JSON-RPC
+  over stdio) exposing read_hex, checksums, statistics, search, strings,
+  signatures, disassemble, inspect, export and apply_template as tools an
+  LLM/agent can call.
 - **Annotations**: bookmarks, regions and free-text notes persist to a
   human-readable `<file>.ghx` sidecar (auto-loaded on reopen).
 - **Disassembly** (14 architectures, pure Rust — no C dependency): x86-16/32/64
@@ -72,8 +78,8 @@ blocks.
   (`yaxpeax-mips`), PowerPC (`ppc750cl`), RISC-V 32/64 (`raki`), MSP430
   (`yaxpeax-msp430`), 6502 (`yaxpeax-6502`) and SM83/Game Boy (`yaxpeax-sm83`) —
   pick the architecture in the disassembly window.
-- **Multi-cursor editing**: Ctrl/Cmd+click adds extra carets; overwrite-mode
-  edits and paste broadcast to all of them. Esc clears.
+- **Multi-cursor editing**: Ctrl/Cmd+click adds extra carets; edits and paste
+  (overwrite *and* insert mode) broadcast to all of them. Esc clears.
 - **Byte map**: visualize the whole file as a colored image to spot structure;
   click a pixel to jump.
 - **Transforms** on a selection: XOR/AND/OR/ADD/SUB/NOT, rotate, shift,
@@ -108,7 +114,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (179 tests)
+cargo test                          # run the test suite (191 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -124,6 +130,25 @@ Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
   cargo install cargo-bundle && cargo bundle --release   # .app/.dmg, .deb, .msi
   cargo install cargo-deb    && cargo deb                 # Debian .deb (Linux)
   ```
+
+## MCP server
+
+`ganghex --mcp` speaks the Model Context Protocol over stdio (newline-delimited
+JSON-RPC 2.0), so an LLM/agent can analyze binaries through ganghex's engine.
+Point an MCP client at the binary:
+
+```json
+{
+  "mcpServers": {
+    "ganghex": { "command": "/path/to/ganghex", "args": ["--mcp"] }
+  }
+}
+```
+
+Tools: `read_hex`, `checksums`, `statistics`, `search`, `strings`,
+`signatures`, `disassemble` (14 architectures), `inspect`, `export`,
+`apply_template`. Each takes a file/device `path` and returns JSON, e.g.
+`disassemble {path, offset, count, arch}` or `checksums {path, algorithms}`.
 
 ## Raw disk / RAM access
 
@@ -161,6 +186,7 @@ src/
     template.rs binary template DSL + interpreter + built-ins + field encode
     script.rs   sandboxed Rhai scripting over a byte buffer
     sidecar.rs  persistent annotations (.ghx): bookmarks/regions/notes
+  mcp.rs        MCP (Model Context Protocol) server — ganghex --mcp
   ui/           egui front-end
     app.rs / app_ui.rs   application state, menus, hex view, dialogs
     hexview.rs  column math, colored row building, click hit-testing
@@ -170,7 +196,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **179 tests**
+Engine, feature operations and GUI are implemented and covered by **191 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 
