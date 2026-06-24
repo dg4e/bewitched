@@ -492,7 +492,46 @@ pure-core discipline; the fourth required a small engine addition.
   exercised in CI — so the tests operate on our **own** process memory, which
   needs no privileges and genuinely verifies the read *and* write paths.
 
-## 10. Known limitations and future work
+## 10. Privileges, persistence, editable structure and scripting
+
+The latest wave rounds out the editing-focused features and is, again, mostly
+pure cores with thin UI.
+
+- **Privilege clarity for live memory.** Touching another process needs root /
+  Administrator, and the worst experience is finding that out via a cryptic
+  failure. So `data/process.rs` exposes `is_elevated()` and a per-OS
+  `privilege_note()`, `open()` short-circuits to `open_self()` for our own PID,
+  and failures return an explicit "administrator/root required" message *with the
+  fix*. The Open-process dialog leads with a red ALL-CAPS banner and shows live
+  elevation status; the menu entry itself is labeled "(root/admin for other
+  PIDs)". The intent is that you cannot stumble into it unaware.
+
+- **Write-through editing.** When a process is open, overwrite keystrokes poke
+  the byte straight to RAM (`live_poke`), opening forces overwrite mode
+  (insert/delete would desync addresses), and the status bar shows a red ⏺ LIVE
+  chip. Combined with the scanner this is a complete trainer: scan → narrow →
+  edit live.
+
+- **Editable template fields.** Templates gained an `EditKind` per field and an
+  `encode()` that turns a typed string back into bytes (width/endian-aware
+  integers with range checks, floats, ascii, hex). The template window grows an
+  inline editor, so a structure view becomes a structure *editor* — and it pokes
+  the process too when one is live.
+
+- **Annotations sidecar** (`sidecar.rs`). Bookmarks, regions and notes persist to
+  a human-readable `<file>.ghx` next to the document, auto-loaded on reopen. The
+  format is line-oriented and forward-compatible (unknown lines are skipped), so
+  it hand-edits and diffs cleanly and is trivially round-trip tested.
+
+- **Scripting** (`script.rs`). Embedded **Rhai** (pure Rust, sandboxed) runs a
+  script against the selection or whole file via a small byte-buffer API
+  (`read/write/len/push/fill/resize`) with captured `print` output. It is bounded
+  by operation/size limits so a runaway loop can't hang the UI, and the buffer is
+  recovered even when the script errors. Results apply through the piece table
+  (undoable) and poke the process when live. This is the "turn the editor into a
+  platform" lever — arbitrary batch transforms without recompiling.
+
+## 11. Known limitations and future work
 
 - **Folded cursor.** Navigation stays in offset space, so the cursor can sit
   inside a collapsed region (invisible until unfolded). A future version could
@@ -509,19 +548,19 @@ pure-core discipline; the fourth required a small engine addition.
 
 ### Still on the list
 
-The big feature tier (live process memory, binary templates, disassembly,
-byte-map + detailed diff) is now implemented; what remains is smaller or
-genuinely optional:
+Almost everything discussed has shipped (live process memory + write-through,
+templates with editable fields, disassembly, byte-map + diff, scripting,
+annotations, loud privilege handling). What remains is either unverifiable in
+this environment or genuinely optional:
 
-- **Windows process backend.** macOS and Linux are done; Windows would use
-  `OpenProcess` + `Read/WriteProcessMemory` + `VirtualQueryEx` (needs the
-  `windows`/`windows-sys` crate).
-- **Editing live memory through the cursor.** Hex-view edits currently go to the
-  piece-table overlay; poking is explicit (selection / scanner). A "write-through"
-  source mode could make every keystroke hit the process directly.
-- **Field editing in templates.** Templates currently *display* parsed fields;
-  letting you edit a field by value (and write it back) is a natural next step.
-- **ARM/other disassembly.** `iced-x86` is x86-only; ARM/RISC-V would need
-  another decoder (likely `capstone`, a C dependency).
-- **Scripting (`rhai`/`lua`), multi-cursor, persistent annotations sidecar.**
-  Each is mostly new UI and/or a dependency rather than new engine work.
+- **Windows process backend.** macOS and Linux are done and tested against our
+  own memory; Windows would use `OpenProcess` + `Read/WriteProcessMemory` +
+  `VirtualQueryEx` (the `windows`/`windows-sys` crate). It is deliberately a stub
+  because there is no Windows target here to compile or test it against —
+  shipping unverifiable platform FFI would be dishonest.
+- **ARM/RISC-V disassembly.** `iced-x86` is x86-only; other ISAs need another
+  decoder (likely `capstone`, a C dependency).
+- **Multi-cursor editing.** Several independent carets is mostly a hex-view UI
+  change with fiddly edge cases (simultaneous typing, overlapping edits).
+- **Scripting reach.** The Rhai API is intentionally small (a byte buffer); it
+  could grow document/region/search bindings and a script library.

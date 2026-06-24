@@ -51,14 +51,21 @@ blocks.
   int/uint 8–64, float32/64, ASCII/UTF-8, uLEB128, RGB/RGBA, `time_t` (32/64),
   Windows `FILETIME`, DOS date/time and GUID, with LE/BE toggle.
 - **Live process memory**: open a running process's memory (by PID + region) as
-  a live view — read, edit and poke it back. macOS (Mach VM) and Linux
-  (`/proc/<pid>/mem`); your own PID needs no privileges.
+  a live view; hex-view edits **write through to RAM** (status shows ⏺ LIVE).
+  macOS (Mach VM) and Linux (`/proc/<pid>/mem`). ⚠ **Other processes need
+  root / Administrator** (your own PID never does) — the dialog shows a loud
+  banner and your current elevation status.
 - **Value scanner** (memory/save editing): first-scan for a typed value, then
   refine (equal / changed / unchanged / increased / decreased) as the data
   changes — the "Cheat Engine" workflow — plus "write value to all matches",
   which pokes the live process when one is open.
 - **Binary templates**: a small DSL parses a file into named, typed,
-  click-to-jump fields; built-ins for BMP/PNG/ELF/WAV/GIF.
+  click-to-jump fields you can **edit by value** and write back; built-ins for
+  BMP/PNG/ELF/WAV/GIF.
+- **Scripting (Rhai)**: run a sandboxed script over the selection/whole file
+  with a `read/write/len/push/fill/resize` byte API and captured output.
+- **Annotations**: bookmarks, regions and free-text notes persist to a
+  human-readable `<file>.ghx` sidecar (auto-loaded on reopen).
 - **Disassembly**: x86/x64 (16/32/64-bit) instruction view at the cursor.
 - **Byte map**: visualize the whole file as a colored image to spot structure;
   click a pixel to jump.
@@ -94,7 +101,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (144 tests)
+cargo test                          # run the test suite (165 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -144,7 +151,9 @@ src/
     diff.rs     detailed binary diff (all differing ranges)
     byteplot.rs byte-as-pixel visualization
     disasm.rs   x86/x64 disassembly (iced-x86)
-    template.rs binary template DSL + interpreter + built-ins
+    template.rs binary template DSL + interpreter + built-ins + field encode
+    script.rs   sandboxed Rhai scripting over a byte buffer
+    sidecar.rs  persistent annotations (.ghx): bookmarks/regions/notes
   ui/           egui front-end
     app.rs / app_ui.rs   application state, menus, hex view, dialogs
     hexview.rs  column math, colored row building, click hit-testing
@@ -154,7 +163,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **144 tests**
+Engine, feature operations and GUI are implemented and covered by **165 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 
