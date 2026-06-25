@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 
 use crate::data::Document;
 use crate::ops::{
-    checksum, disasm, export, inspect, patch, script, search, signatures, stats, strings,
+    checksum, diff, disasm, export, inspect, patch, script, search, signatures, stats, strings,
     template, transform, Progress,
 };
 
@@ -256,6 +256,38 @@ impl Server {
                 }
                 doc.save_to(path).map_err(|e| format!("save failed: {e}"))?;
                 Ok(json!({ "records": writes.len() }).to_string())
+            }
+            "compare" => {
+                let pa = args.get("path_a").and_then(|p| p.as_str()).ok_or("missing 'path_a'")?;
+                let pb = args.get("path_b").and_then(|p| p.as_str()).ok_or("missing 'path_b'")?;
+                let a = Document::open_file(pa).map_err(|e| format!("open a: {e}"))?;
+                let b = Document::open_file(pb).map_err(|e| format!("open b: {e}"))?;
+                let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(1000) as usize;
+                let r = diff::diff(&a, &b, max, &Progress::default());
+                let ranges: Vec<Value> = r
+                    .ranges
+                    .iter()
+                    .map(|d| json!({"offset": d.offset, "len": d.len}))
+                    .collect();
+                Ok(json!({
+                    "equal": r.ranges.is_empty() && r.len_a == r.len_b,
+                    "len_a": r.len_a, "len_b": r.len_b,
+                    "truncated": r.truncated, "ranges": ranges
+                })
+                .to_string())
+            }
+            "carve" => {
+                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let outp = args.get("output").and_then(|p| p.as_str()).ok_or("missing 'output'")?;
+                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+                let len = args
+                    .get("length")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(doc.len().saturating_sub(off));
+                let data = doc.read_range(off, len as usize);
+                std::fs::write(outp, &data).map_err(|e| format!("write: {e}"))?;
+                Ok(json!({ "carved": data.len(), "output": outp }).to_string())
             }
             "script" => {
                 let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
@@ -521,6 +553,15 @@ fn tools_list() -> Value {
             "offset": {"type":"integer"}, "length": {"type":"integer"} })) },
         { "name": "statistics", "description": "Entropy, byte distribution summary and a data-type classification.",
           "inputSchema": path_schema(json!({ "offset": {"type":"integer"}, "length": {"type":"integer"} })) },
+        { "name": "histogram", "description": "Full 256-bin byte distribution plus entropy and most-common byte.",
+          "inputSchema": path_schema(json!({ "offset": {"type":"integer"}, "length": {"type":"integer"} })) },
+        { "name": "entropy_map", "description": "Per-bucket entropy across the range (locate compressed/encrypted regions).",
+          "inputSchema": path_schema(json!({ "offset": {"type":"integer"}, "length": {"type":"integer"}, "buckets": {"type":"integer","description":"default 64"} })) },
+        { "name": "compare", "description": "Byte-diff two files; returns differing ranges.",
+          "inputSchema": json!({ "type":"object", "required":["path_a","path_b"], "properties": {
+            "path_a": {"type":"string"}, "path_b": {"type":"string"}, "max": {"type":"integer"} } }) },
+        { "name": "carve", "description": "Extract a byte range to a new file (e.g. an embedded blob found by signatures).",
+          "inputSchema": path_schema(json!({ "offset": {"type":"integer"}, "length": {"type":"integer"}, "output": {"type":"string"} })) },
         { "name": "search", "description": "Find occurrences of a typed value; returns match offsets.",
           "inputSchema": path_schema(json!({
             "type": {"type":"string","description":"text|utf16|hex|i8|i16|i32|i64|f32|f64"},
@@ -634,6 +675,23 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
                 "most_common": mc
             })
             .to_string())
+        }
+        "histogram" => {
+            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
+            let s = stats::analyze(&doc, off, len, &Progress::default());
+            Ok(json!({
+                "total": s.total,
+                "entropy_bits_per_byte": s.entropy,
+                "counts": s.counts.to_vec(),
+                "most_common": s.most_common().map(|(b, c)| json!({"byte": b, "count": c}))
+            })
+            .to_string())
+        }
+        "entropy_map" => {
+            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
+            let buckets = args.get("buckets").and_then(|v| v.as_u64()).unwrap_or(64) as usize;
+            let map = stats::entropy_map(&doc, off, len, buckets, &Progress::default());
+            Ok(json!({ "buckets": buckets, "entropy": map }).to_string())
         }
         "search" => {
             let ty = parse_datatype(args.get("type").and_then(|v| v.as_str()).unwrap_or("hex"))?;
@@ -943,6 +1001,38 @@ mod tests {
         })).unwrap();
         let text = dis["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("xor rax,rax"), "got {text}");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn compare_and_carve_tools() {
+        let a = tmpfile(b"AAAAAAAA");
+        let b = tmpfile(b"AABBAAAA");
+        let mut s = Server::new();
+        let cmp = call(&mut s, "compare", json!({"path_a": a.to_str().unwrap(), "path_b": b.to_str().unwrap()}));
+        assert_eq!(cmp["equal"], false);
+        assert_eq!(cmp["ranges"][0]["offset"], 2);
+        assert_eq!(cmp["ranges"][0]["len"], 2);
+
+        // carve bytes 2..4 of b into a new file
+        let out = tmpfile(b"");
+        let carved = call(&mut s, "carve", json!({
+            "path": b.to_str().unwrap(), "offset": 2, "length": 2, "output": out.to_str().unwrap()
+        }));
+        assert_eq!(carved["carved"], 2);
+        assert_eq!(std::fs::read(&out).unwrap(), b"BB");
+        for f in [a, b, out] { let _ = std::fs::remove_file(&f); }
+    }
+
+    #[test]
+    fn histogram_and_entropy_map_tools() {
+        let p = tmpfile(&[0u8; 100]);
+        let mut s = Server::new();
+        let h = call(&mut s, "histogram", json!({"path": p.to_str().unwrap()}));
+        assert_eq!(h["counts"][0], 100);
+        assert_eq!(h["entropy_bits_per_byte"], 0.0);
+        let em = call(&mut s, "entropy_map", json!({"path": p.to_str().unwrap(), "buckets": 4}));
+        assert_eq!(em["entropy"].as_array().unwrap().len(), 4);
         let _ = std::fs::remove_file(&p);
     }
 
