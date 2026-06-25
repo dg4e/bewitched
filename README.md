@@ -41,7 +41,8 @@ blocks.
   `Ctrl+0–9` to jump).
 - **Search / replace** (`Ctrl+F`) for text, Unicode (UTF-16), hex, integers
   (8/16/32/64) and floats (32/64), little/big-endian, forward / backward /
-  from-start, case-insensitive, streaming (never loads the whole file).
+  from-start, case-insensitive, streaming (never loads the whole file). Hex
+  patterns support **`?` wildcards** (AOB scans), e.g. `DE ?? BE EF`.
 - **Checksums & digests**: Checksum-8/16/32, Adler-32, CRC-16, CRC-32, CRC-64,
   MD5, SHA-1, SHA-256, SHA-512 — computed in one streaming pass.
 - **Statistics**: byte/character distribution chart, Shannon entropy, a
@@ -58,8 +59,10 @@ blocks.
   elevation status.
 - **Value scanner** (memory/save editing): first-scan for a typed value, then
   refine (equal / changed / unchanged / increased / decreased) as the data
-  changes — the "Cheat Engine" workflow — plus "write value to all matches",
-  which pokes the live process when one is open.
+  changes — the "Cheat Engine" workflow — plus "write value to all matches" and
+  **❄ freeze** (continuously re-poke a value into the live process).
+- **Pointer scanning**: find 64-bit pointers that reference a target address —
+  the primitive behind pointer maps (MCP `find_pointers`).
 - **Binary templates**: a small DSL parses a file into named, typed,
   click-to-jump fields you can **edit by value** and write back; built-ins for
   BMP/PNG/ELF/WAV/GIF.
@@ -123,7 +126,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (218 tests)
+cargo test                          # run the test suite (226 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -155,11 +158,12 @@ Point an MCP client at the binary:
 ```
 
 Read/analyze tools: `read_hex`, `checksums`, `statistics`, `histogram`,
-`entropy_map`, `search`, `strings`, `signatures`, `disassemble` (14
-architectures), `inspect`, `export`, `apply_template`, `compare` — each takes a
-file/device `path` and returns JSON, e.g. `disassemble {path, offset, count,
-arch}`. Write tools: `write_bytes`, `transform`, `patch_create`, `patch_apply`,
-`carve`, `decompress`, `compress`, `script` (run Rhai over a range). Editing
+`entropy_map`, `search`, `search_pattern` (wildcards), `find_pointers`,
+`strings`, `signatures`, `disassemble` (14 architectures), `inspect`, `export`,
+`apply_template`, `compare` — each takes a file/device `path` and returns JSON,
+e.g. `disassemble {path, offset, count, arch}`. Write tools: `write_bytes`,
+`transform`, `patch_create`, `patch_apply`, `carve`, `decompress`, `compress`,
+`script` (run Rhai over a range). Editing
 sessions: `open` returns a session id, then
 `session_read/write/insert/delete/undo/save/script/close` edit it through the
 piece table (undoable; written on `session_save`).
@@ -196,7 +200,8 @@ src/
     inspect.rs  data inspector (typed decode of cursor bytes)
     transform.rs in-place byte transforms (xor/rotate/swap/...)
     strings.rs  ASCII + UTF-16 string extraction
-    scan.rs     value scanner (first-scan + refine)
+    scan.rs     value scanner (first-scan + refine) + freeze
+    pointer.rs  pointer scanning (find pointers to an address)
     signatures.rs binwalk-style format/crypto signature scan
     patch.rs    IPS patch create / parse / apply
     diff.rs     detailed binary diff (all differing ranges)
@@ -217,7 +222,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **218 tests**
+Engine, feature operations and GUI are implemented and covered by **226 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 
