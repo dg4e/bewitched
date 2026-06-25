@@ -1801,20 +1801,49 @@ impl App {
             .resizable(true)
             .default_width(560.0)
             .show(ctx, |ui| {
+                let mut load_src: Option<String> = None;
                 ui.horizontal(|ui| {
                     if ui.button("Run").clicked() {
                         self.run_script();
                     }
                     ui.checkbox(&mut self.script.whole_file, "Whole file (else selection)");
-                    egui::ComboBox::from_label("Library")
-                        .selected_text(crate::ops::script::LIBRARY[self.script.library].0)
+                    egui::ComboBox::from_label("Load")
+                        .selected_text("library / saved")
                         .show_ui(ui, |ui| {
-                            for (i, (name, _)) in crate::ops::script::LIBRARY.iter().enumerate() {
-                                if ui.selectable_value(&mut self.script.library, i, *name).clicked() {
-                                    self.script.src = crate::ops::script::LIBRARY[i].1.to_string();
+                            ui.label(egui::RichText::new("built-in").color(theme::GREEN_DIM));
+                            for (name, src) in crate::ops::script::LIBRARY {
+                                if ui.selectable_label(false, *name).clicked() {
+                                    load_src = Some(src.to_string());
+                                }
+                            }
+                            let user = crate::ops::script_store::list();
+                            if !user.is_empty() {
+                                ui.separator();
+                                ui.label(egui::RichText::new("saved").color(theme::GREEN_DIM));
+                                for (name, _) in &user {
+                                    if ui.selectable_label(false, name).clicked() {
+                                        load_src = crate::ops::script_store::load(name);
+                                    }
                                 }
                             }
                         });
+                });
+                if let Some(s) = load_src {
+                    self.script.src = s;
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Save as:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.script.save_name)
+                            .desired_width(160.0)
+                            .hint_text("name"),
+                    );
+                    if ui.button("Save script").clicked() {
+                        match crate::ops::script_store::save(&self.script.save_name, &self.script.src) {
+                            Ok(p) => self.script.output = format!("saved {}", p.display()),
+                            Err(e) => self.script.output = format!("save failed: {e}"),
+                        }
+                    }
                 });
                 ui.separator();
                 egui::ScrollArea::vertical().max_height(260.0).id_salt("script_src").show(ui, |ui| {

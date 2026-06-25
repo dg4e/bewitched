@@ -87,6 +87,10 @@ impl Server {
         "ping" => Some(result_response(&id, json!({}))),
         "tools/list" => Some(result_response(&id, json!({ "tools": tools_list() }))),
         "resources/list" => Some(result_response(&id, json!({ "resources": resources_list() }))),
+        "resources/templates/list" => Some(result_response(
+            &id,
+            json!({ "resourceTemplates": resource_templates_list() }),
+        )),
         "resources/read" => {
             let uri = req
                 .get("params")
@@ -299,11 +303,21 @@ fn resolve_script(args: &Value) -> Result<String, String> {
     }
     if let Some(name) = args.get("library").and_then(|v| v.as_str()) {
         let key = name.to_lowercase();
-        return script::LIBRARY
-            .iter()
+        if let Some((_, s)) = script::LIBRARY.iter().find(|(n, _)| n.to_lowercase().contains(&key)) {
+            return Ok(s.to_string());
+        }
+        // fall back to a saved user script (exact, then case-insensitive)
+        if let Some(s) = crate::ops::script_store::load(name) {
+            return Ok(s);
+        }
+        if let Some(s) = crate::ops::script_store::list()
+            .into_iter()
             .find(|(n, _)| n.to_lowercase().contains(&key))
-            .map(|(_, s)| s.to_string())
-            .ok_or_else(|| format!("no library script matching '{name}'"));
+            .and_then(|(n, _)| crate::ops::script_store::load(&n))
+        {
+            return Ok(s);
+        }
+        return Err(format!("no library script matching '{name}'"));
     }
     Err("provide 'source' or 'library'".into())
 }
@@ -369,6 +383,14 @@ fn resources_list() -> Value {
             "mimeType": "text/plain"
         }));
     }
+    for (name, _) in crate::ops::script_store::list() {
+        out.push(json!({
+            "uri": format!("ganghex://scripts/{name}"),
+            "name": format!("saved script: {name}"),
+            "description": "user-saved Rhai script (source)",
+            "mimeType": "text/plain"
+        }));
+    }
     for r in ["architectures", "formats", "checksums"] {
         out.push(json!({
             "uri": format!("ganghex://reference/{r}"),
@@ -380,7 +402,25 @@ fn resources_list() -> Value {
     Value::Array(out)
 }
 
+fn resource_templates_list() -> Value {
+    json!([
+        {
+            "uriTemplate": "file://{path}",
+            "name": "raw file (hex dump)",
+            "description": "Read any file by absolute path as a hex dump, e.g. file:///tmp/x.bin",
+            "mimeType": "text/plain"
+        }
+    ])
+}
+
 fn read_resource(uri: &str) -> Result<String, String> {
+    // file:///abs/path -> hex dump (capped)
+    if let Some(rest) = uri.strip_prefix("file://") {
+        let path = rest;
+        let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+        let len = doc.len().min(64 * 1024);
+        return Ok(export::export(&doc, 0, len, export::Format::PlainHexDump));
+    }
     if let Some(name) = uri.strip_prefix("ganghex://templates/") {
         return template::BUILTINS
             .iter()
@@ -389,11 +429,10 @@ fn read_resource(uri: &str) -> Result<String, String> {
             .ok_or_else(|| format!("no template '{name}'"));
     }
     if let Some(name) = uri.strip_prefix("ganghex://scripts/") {
-        return crate::ops::script::LIBRARY
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, s)| s.to_string())
-            .ok_or_else(|| format!("no script '{name}'"));
+        if let Some((_, s)) = crate::ops::script::LIBRARY.iter().find(|(n, _)| *n == name) {
+            return Ok(s.to_string());
+        }
+        return crate::ops::script_store::load(name).ok_or_else(|| format!("no script '{name}'"));
     }
     match uri {
         "ganghex://reference/architectures" => Ok(disasm::Arch::ALL
@@ -828,6 +867,22 @@ mod tests {
             "params":{"uri":"ganghex://reference/architectures"}
         })).unwrap();
         assert!(arch["result"]["contents"][0]["text"].as_str().unwrap().contains("ARM64"));
+    }
+
+    #[test]
+    fn file_resource_template_and_read() {
+        let mut s = Server::new();
+        let tl = s.handle(&json!({"jsonrpc":"2.0","id":1,"method":"resources/templates/list"})).unwrap();
+        let temps = tl["result"]["resourceTemplates"].as_array().unwrap();
+        assert!(temps.iter().any(|t| t["uriTemplate"] == "file://{path}"));
+
+        let p = tmpfile(&[0xDE, 0xAD, 0xBE, 0xEF]);
+        let uri = format!("file://{}", p.to_str().unwrap());
+        let read = s.handle(&json!({
+            "jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri": uri}
+        })).unwrap();
+        assert!(read["result"]["contents"][0]["text"].as_str().unwrap().contains("DE AD BE EF"));
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub mod patch;
 pub mod pattern;
 pub mod scan;
 pub mod script;
+pub mod script_store;
 pub mod search;
 pub mod sidecar;
 pub mod signatures;
