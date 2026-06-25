@@ -614,6 +614,8 @@ fn tools_list() -> Value {
             "type": {"type":"string","description":"text|utf16|hex|i8|i16|i32|i64|f32|f64"},
             "value": {"type":"string"},
             "max": {"type":"integer","description":"max results (default 100)"} })) },
+        { "name": "search_pattern", "description": "Wildcard 'AOB' search: a hex pattern with '?' wildcards, e.g. 'DE ?? BE EF'. Returns match offsets.",
+          "inputSchema": path_schema(json!({ "pattern": {"type":"string"}, "max": {"type":"integer"} })) },
         { "name": "strings", "description": "Extract ASCII/UTF-16 strings.",
           "inputSchema": path_schema(json!({
             "min_length": {"type":"integer","description":"default 4"},
@@ -756,6 +758,13 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
                     None => break,
                 }
             }
+            Ok(json!({ "matches": hits, "count": hits.len() }).to_string())
+        }
+        "search_pattern" => {
+            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+            let (pat, mask) = search::parse_hex_mask(pattern)?;
+            let hits = search::find_all_masked(&doc, &pat, &mask, max);
             Ok(json!({ "matches": hits, "count": hits.len() }).to_string())
         }
         "strings" => {
@@ -1113,6 +1122,16 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(resp["result"]["isError"], true);
+    }
+
+    #[test]
+    fn search_pattern_wildcards() {
+        let p = tmpfile(&[0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0x99, 0xBE, 0xEF]);
+        let resp = call(&mut Server::new(), "search_pattern", json!({
+            "path": p.to_str().unwrap(), "pattern": "DE ?? BE EF"
+        }));
+        assert_eq!(resp["matches"], json!([1, 5]));
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

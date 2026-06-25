@@ -705,6 +705,13 @@ impl App {
                     ui.label("Find:   ");
                     ui.text_edit_singleline(&mut self.search.needle);
                 });
+                if TYPES[self.search.data_type].1 == search::DataType::Hex {
+                    ui.label(
+                        egui::RichText::new("hex supports '?' wildcards, e.g. DE ?? BE EF")
+                            .small()
+                            .color(theme::GREEN_DIM),
+                    );
+                }
                 ui.horizontal(|ui| {
                     ui.label("Replace:");
                     ui.text_edit_singleline(&mut self.search.replace);
@@ -756,6 +763,11 @@ impl App {
     }
 
     fn do_find(&mut self, dir: search::Direction) {
+        // Wildcard "AOB" search: a hex pattern containing '?' uses masked search.
+        let is_hex = TYPES[self.search.data_type].1 == search::DataType::Hex;
+        if is_hex && self.search.needle.contains('?') {
+            return self.do_find_masked(dir);
+        }
         let needle = match self.needle_bytes("find") {
             Ok(n) if !n.is_empty() => n,
             Ok(_) => {
@@ -782,6 +794,31 @@ impl App {
                 self.search.status = format!("match at {:#X}", off);
             }
             None => self.search.status = "not found".into(),
+        }
+    }
+
+    fn do_find_masked(&mut self, dir: search::Direction) {
+        let (pat, mask) = match search::parse_hex_mask(&self.search.needle) {
+            Ok(pm) => pm,
+            Err(e) => {
+                self.search.status = e;
+                return;
+            }
+        };
+        let from = match dir {
+            search::Direction::Backward => 0, // masked search is forward-only
+            search::Direction::Forward => self.cursor + 1,
+            search::Direction::All => 0,
+        };
+        match search::find_masked(&self.doc, &pat, &mask, from) {
+            Some(off) => {
+                self.sel_anchor = Some(off);
+                self.cursor = off + pat.len() as u64 - 1;
+                self.nibble = 0;
+                self.scroll_to_cursor = true;
+                self.search.status = format!("pattern match at {:#X}", off);
+            }
+            None => self.search.status = "pattern not found".into(),
         }
     }
 

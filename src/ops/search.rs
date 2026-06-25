@@ -123,6 +123,88 @@ fn hexval(c: u8) -> Option<u8> {
 
 const WIN: usize = 1 << 20; // 1 MiB scan window
 
+/// Parse a wildcard hex "array-of-bytes" pattern into (bytes, mask). Tokens are
+/// whitespace-separated; `?` or `??` is a wildcard byte (mask = false), anything
+/// else is even-length hex (mask = true for each byte). Example: `DE ?? BE EF`.
+pub fn parse_hex_mask(input: &str) -> Result<(Vec<u8>, Vec<bool>), String> {
+    let mut bytes = Vec::new();
+    let mut mask = Vec::new();
+    for tok in input.split_whitespace() {
+        if tok == "?" || tok == "??" {
+            bytes.push(0);
+            mask.push(false);
+        } else if tok.len() % 2 == 0 && !tok.is_empty() {
+            let b = tok.as_bytes();
+            let mut i = 0;
+            while i < b.len() {
+                let hi = hexval(b[i]).ok_or("invalid hex digit")?;
+                let lo = hexval(b[i + 1]).ok_or("invalid hex digit")?;
+                bytes.push(hi << 4 | lo);
+                mask.push(true);
+                i += 2;
+            }
+        } else {
+            return Err(format!("invalid pattern token '{tok}'"));
+        }
+    }
+    if bytes.is_empty() {
+        return Err("empty pattern".into());
+    }
+    Ok((bytes, mask))
+}
+
+fn masked_eq(hay: &[u8], i: usize, pat: &[u8], mask: &[bool]) -> bool {
+    pat.iter()
+        .zip(mask)
+        .enumerate()
+        .all(|(k, (p, m))| !*m || hay[i + k] == *p)
+}
+
+/// Find the next position (at/after `from`) where `pattern` matches under `mask`.
+pub fn find_masked(reader: &dyn ByteReader, pat: &[u8], mask: &[bool], from: u64) -> Option<u64> {
+    let nlen = pat.len();
+    if nlen == 0 || mask.len() != nlen {
+        return None;
+    }
+    let total = reader.len();
+    let overlap = (nlen - 1) as u64;
+    let mut buf = vec![0u8; WIN + overlap as usize];
+    let mut pos = from.min(total);
+    while pos < total {
+        let want = ((total - pos) as usize).min(buf.len());
+        let n = reader.read_at(pos, &mut buf[..want]);
+        if n < nlen {
+            break;
+        }
+        let hay = &buf[..n];
+        let mut i = 0;
+        while i + nlen <= hay.len() {
+            if masked_eq(hay, i, pat, mask) {
+                return Some(pos + i as u64);
+            }
+            i += 1;
+        }
+        pos += (n as u64).saturating_sub(overlap).max(1);
+    }
+    None
+}
+
+/// Collect up to `max` masked-pattern matches.
+pub fn find_all_masked(reader: &dyn ByteReader, pat: &[u8], mask: &[bool], max: usize) -> Vec<u64> {
+    let mut out = Vec::new();
+    let mut from = 0u64;
+    while out.len() < max {
+        match find_masked(reader, pat, mask, from) {
+            Some(o) => {
+                out.push(o);
+                from = o + 1;
+            }
+            None => break,
+        }
+    }
+    out
+}
+
 /// Find the next match at or after `from` (forward) or strictly before `from`
 /// (backward). `All` behaves like forward starting at 0. Returns match offset.
 pub fn find(
@@ -387,6 +469,27 @@ mod tests {
         let n = replace_all(&mut doc, b"-", b"", false, &super::super::Progress::default());
         assert_eq!(n, 2);
         assert_eq!(doc.to_vec(), b"abc");
+    }
+
+    #[test]
+    fn masked_pattern_parse_and_find() {
+        let (pat, mask) = parse_hex_mask("DE ?? BE EF").unwrap();
+        assert_eq!(pat, vec![0xDE, 0x00, 0xBE, 0xEF]);
+        assert_eq!(mask, vec![true, false, true, true]);
+
+        let doc = d(&[0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0x99, 0xBE, 0xEF]);
+        assert_eq!(find_masked(&doc, &pat, &mask, 0), Some(1));
+        assert_eq!(find_masked(&doc, &pat, &mask, 2), Some(5)); // wildcard matches 0x99 too
+        assert_eq!(find_all_masked(&doc, &pat, &mask, 10), vec![1, 5]);
+    }
+
+    #[test]
+    fn masked_multibyte_tokens() {
+        let (pat, mask) = parse_hex_mask("DEAD ? EF").unwrap();
+        assert_eq!(pat, vec![0xDE, 0xAD, 0x00, 0xEF]);
+        assert_eq!(mask, vec![true, true, false, true]);
+        assert!(parse_hex_mask("").is_err());
+        assert!(parse_hex_mask("ZZ").is_err());
     }
 
     #[test]
