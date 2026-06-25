@@ -349,6 +349,8 @@ pub struct App {
     script: ScriptState,
     process_ui: ProcessUiState,
     process_target: Option<ProcTarget>,
+    /// Frozen live-memory values: (document offset, bytes) re-poked every frame.
+    frozen: Vec<(u64, Vec<u8>)>,
     notes: Vec<sidecar::Note>,
     notes_open: bool,
     note_input: String,
@@ -421,6 +423,7 @@ impl App {
                 ..Default::default()
             },
             process_target: None,
+            frozen: Vec::new(),
             notes: Vec::new(),
             notes_open: false,
             note_input: String::new(),
@@ -486,7 +489,17 @@ impl App {
         self.bookmarks = [None; 10];
         self.extra_cursors.clear();
         self.process_target = None;
+        self.frozen.clear();
         self.scroll_to_cursor = true;
+    }
+
+    /// Re-poke every frozen value into the target process. Called each frame.
+    fn enforce_frozen(&self) {
+        if let Some(meta) = &self.process_target {
+            for (off, bytes) in &self.frozen {
+                let _ = meta.handle.write(meta.base + off, bytes);
+            }
+        }
     }
 
     // ---- multi-cursor ----
@@ -846,6 +859,33 @@ impl App {
         }
         self.scan.status = format!("wrote value to {} location(s)", offsets.len());
         self.scroll_to_cursor = true;
+    }
+
+    fn freeze_matches(&mut self) {
+        if self.process_target.is_none() {
+            self.scan.status = "freeze needs a live process".into();
+            return;
+        }
+        let needle = match self.scan_needle() {
+            Ok(n) if !n.is_empty() => n,
+            _ => {
+                self.scan.status = "enter a value to freeze".into();
+                return;
+            }
+        };
+        let offsets: Vec<u64> = self.scan.matches.iter().map(|m| m.offset).collect();
+        for off in offsets {
+            if !self.frozen.iter().any(|(o, _)| *o == off) {
+                self.frozen.push((off, needle.clone()));
+            }
+        }
+        self.scan.status = format!("froze {} value(s)", self.frozen.len());
+    }
+
+    fn unfreeze_all(&mut self) {
+        let n = self.frozen.len();
+        self.frozen.clear();
+        self.scan.status = format!("unfroze {n} value(s)");
     }
 
     // ---- IPS patches ----

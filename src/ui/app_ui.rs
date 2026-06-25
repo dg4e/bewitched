@@ -4,6 +4,12 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_bg(ctx);
 
+        // Keep frozen live-memory values pinned.
+        if !self.frozen.is_empty() && self.process_target.is_some() {
+            self.enforce_frozen();
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+
         egui::TopBottomPanel::top("menu").show(ctx, |ui| self.menu_bar(ui));
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| self.status_bar(ui));
 
@@ -373,6 +379,15 @@ impl App {
                     )
                     .on_hover_text("editing writes through to process memory");
                     ui.separator();
+                    if !self.frozen.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!("❄ {}", self.frozen.len()))
+                                .color(theme::RED)
+                                .strong(),
+                        )
+                        .on_hover_text("frozen values being re-poked");
+                        ui.separator();
+                    }
                 }
                 if !self.extra_cursors.is_empty() {
                     ui.label(
@@ -1491,6 +1506,27 @@ impl App {
                     if ui.button("Clear").clicked() {
                         self.scan.matches.clear();
                         self.scan.status.clear();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            self.process_target.is_some() && !self.scan.matches.is_empty(),
+                            egui::Button::new("❄ Freeze matches"),
+                        )
+                        .on_hover_text("keep re-writing the value into the live process")
+                        .clicked()
+                    {
+                        self.freeze_matches();
+                    }
+                    if !self.frozen.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!("❄ {} frozen", self.frozen.len()))
+                                .color(theme::RED),
+                        );
+                        if ui.button("Unfreeze all").clicked() {
+                            self.unfreeze_all();
+                        }
                     }
                 });
                 if !self.scan.status.is_empty() {
