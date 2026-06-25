@@ -261,6 +261,25 @@ impl App {
                     self.transform.open = true;
                     ui.close_menu();
                 }
+                ui.menu_button("Compression", |ui| {
+                    if ui.button("Decompress (auto-detect)").clicked() {
+                        self.do_decompress();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Compress — zlib").clicked() {
+                        self.do_compress(compress::Codec::Zlib);
+                        ui.close_menu();
+                    }
+                    if ui.button("Compress — gzip").clicked() {
+                        self.do_compress(compress::Codec::Gzip);
+                        ui.close_menu();
+                    }
+                    if ui.button("Compress — raw deflate").clicked() {
+                        self.do_compress(compress::Codec::Deflate);
+                        ui.close_menu();
+                    }
+                });
                 if ui.button("Extract strings…").clicked() {
                     self.strings.open = true;
                     ui.close_menu();

@@ -22,6 +22,7 @@ md-5 = "0.10"
 crc32fast = "1.4"
 crc = "3.2"
 adler = "1.0"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "nasm"] }
 yaxpeax-arch = "0.3"
 yaxpeax-arm = "0.3"

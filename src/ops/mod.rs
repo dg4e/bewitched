@@ -6,6 +6,7 @@
 
 pub mod byteplot;
 pub mod checksum;
+pub mod compress;
 pub mod diff;
 pub mod disasm;
 pub mod export;

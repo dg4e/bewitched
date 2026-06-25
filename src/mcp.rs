@@ -276,6 +276,49 @@ impl Server {
                 })
                 .to_string())
             }
+            "decompress" => {
+                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let len = args
+                    .get("length")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(doc.len().saturating_sub(off));
+                let data = doc.read_range(off, len as usize);
+                let codec = match args.get("codec").and_then(|v| v.as_str()) {
+                    Some(s) => crate::ops::compress::Codec::parse(s).ok_or("unknown codec")?,
+                    None => crate::ops::compress::detect(&data)
+                        .ok_or("could not detect codec — pass 'codec'")?,
+                };
+                let out = crate::ops::compress::decompress(&data, codec)?;
+                if let Some(outp) = args.get("output").and_then(|p| p.as_str()) {
+                    std::fs::write(outp, &out).map_err(|e| format!("write: {e}"))?;
+                    Ok(json!({ "codec": codec.name(), "bytes": out.len(), "output": outp }).to_string())
+                } else {
+                    let preview = out.len().min(64 * 1024);
+                    let hex = export::export_bytes(&out[..preview], 0, export::Format::PlainHexDump);
+                    Ok(json!({ "codec": codec.name(), "bytes": out.len(), "hex": hex }).to_string())
+                }
+            }
+            "compress" => {
+                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let outp = args.get("output").and_then(|p| p.as_str()).ok_or("missing 'output'")?;
+                let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let len = args
+                    .get("length")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(doc.len().saturating_sub(off));
+                let codec = crate::ops::compress::Codec::parse(
+                    args.get("codec").and_then(|v| v.as_str()).unwrap_or("zlib"),
+                )
+                .ok_or("unknown codec")?;
+                let level = args.get("level").and_then(|v| v.as_u64()).unwrap_or(6) as u32;
+                let data = doc.read_range(off, len as usize);
+                let out = crate::ops::compress::compress(&data, codec, level);
+                std::fs::write(outp, &out).map_err(|e| format!("write: {e}"))?;
+                Ok(json!({ "codec": codec.name(), "bytes": out.len(), "output": outp }).to_string())
+            }
             "carve" => {
                 let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
                 let outp = args.get("output").and_then(|p| p.as_str()).ok_or("missing 'output'")?;
@@ -562,6 +605,10 @@ fn tools_list() -> Value {
             "path_a": {"type":"string"}, "path_b": {"type":"string"}, "max": {"type":"integer"} } }) },
         { "name": "carve", "description": "Extract a byte range to a new file (e.g. an embedded blob found by signatures).",
           "inputSchema": path_schema(json!({ "offset": {"type":"integer"}, "length": {"type":"integer"}, "output": {"type":"string"} })) },
+        { "name": "decompress", "description": "Decompress a range (gzip/zlib/deflate; auto-detects if 'codec' omitted). Writes 'output' or returns a hex preview.",
+          "inputSchema": path_schema(json!({ "offset": {"type":"integer"}, "length": {"type":"integer"}, "codec": {"type":"string"}, "output": {"type":"string"} })) },
+        { "name": "compress", "description": "Compress a range (gzip/zlib/deflate) to a new file.",
+          "inputSchema": path_schema(json!({ "offset": {"type":"integer"}, "length": {"type":"integer"}, "codec": {"type":"string"}, "level": {"type":"integer"}, "output": {"type":"string"} })) },
         { "name": "search", "description": "Find occurrences of a typed value; returns match offsets.",
           "inputSchema": path_schema(json!({
             "type": {"type":"string","description":"text|utf16|hex|i8|i16|i32|i64|f32|f64"},
@@ -1022,6 +1069,28 @@ mod tests {
         assert_eq!(carved["carved"], 2);
         assert_eq!(std::fs::read(&out).unwrap(), b"BB");
         for f in [a, b, out] { let _ = std::fs::remove_file(&f); }
+    }
+
+    #[test]
+    fn compress_decompress_tools_roundtrip() {
+        let original = b"PAYLOAD ".repeat(64);
+        let p = tmpfile(&original);
+        let zp = tmpfile(b"");
+        let out = tmpfile(b"");
+        let mut s = Server::new();
+        // compress p -> zp (zlib)
+        let c = call(&mut s, "compress", json!({
+            "path": p.to_str().unwrap(), "codec": "zlib", "output": zp.to_str().unwrap()
+        }));
+        assert_eq!(c["codec"], "zlib");
+        assert!((c["bytes"].as_u64().unwrap() as usize) < original.len());
+        // decompress zp -> out (auto-detect)
+        let d = call(&mut s, "decompress", json!({
+            "path": zp.to_str().unwrap(), "output": out.to_str().unwrap()
+        }));
+        assert_eq!(d["codec"], "zlib");
+        assert_eq!(std::fs::read(&out).unwrap(), original);
+        for f in [p, zp, out] { let _ = std::fs::remove_file(&f); }
     }
 
     #[test]

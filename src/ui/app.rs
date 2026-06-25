@@ -8,8 +8,8 @@ use egui::{Key, Sense};
 
 use crate::data::{Document, MemRegion, ProcessHandle, ProcessSource, Region, RowItem, ViewMap};
 use crate::ops::{
-    byteplot, checksum, diff, disasm, export, fileops, inspect, patch, pattern, scan, script,
-    search, sidecar, signatures, stats, strings, template, transform, Progress,
+    byteplot, checksum, compress, diff, disasm, export, fileops, inspect, patch, pattern, scan,
+    script, search, sidecar, signatures, stats, strings, template, transform, Progress,
 };
 
 use super::charset::Charset;
@@ -729,6 +729,39 @@ impl App {
         transform::apply(&mut data, op);
         self.doc.overwrite(s, &data);
         self.status = format!("transformed {} bytes", e - s);
+        self.scroll_to_cursor = true;
+    }
+
+    // ---- compression ----
+
+    fn compress_scope(&self) -> (u64, u64) {
+        self.selection_range()
+            .map(|(s, e)| (s, e - s))
+            .unwrap_or((0, self.doc.len()))
+    }
+
+    fn do_decompress(&mut self) {
+        let (off, len) = self.compress_scope();
+        let data = self.doc.read_range(off, len as usize);
+        let codec = compress::detect(&data).unwrap_or(compress::Codec::Deflate);
+        match compress::decompress(&data, codec) {
+            Ok(out) => {
+                let m = out.len();
+                self.doc.replace(off, len, &out);
+                self.status = format!("decompressed {len} → {m} bytes ({})", codec.name());
+                self.scroll_to_cursor = true;
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
+    fn do_compress(&mut self, codec: compress::Codec) {
+        let (off, len) = self.compress_scope();
+        let data = self.doc.read_range(off, len as usize);
+        let out = compress::compress(&data, codec, 6);
+        let m = out.len();
+        self.doc.replace(off, len, &out);
+        self.status = format!("compressed {len} → {m} bytes ({})", codec.name());
         self.scroll_to_cursor = true;
     }
 

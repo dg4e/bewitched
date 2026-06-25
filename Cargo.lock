@@ -1368,6 +1368,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "flate2",
  "iced-x86",
  "mach2",
  "md-5",
