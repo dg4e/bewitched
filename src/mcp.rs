@@ -616,6 +616,13 @@ fn tools_list() -> Value {
             "max": {"type":"integer","description":"max results (default 100)"} })) },
         { "name": "search_pattern", "description": "Wildcard 'AOB' search: a hex pattern with '?' wildcards, e.g. 'DE ?? BE EF'. Returns match offsets.",
           "inputSchema": path_schema(json!({ "pattern": {"type":"string"}, "max": {"type":"integer"} })) },
+        { "name": "find_pointers", "description": "Find 64-bit pointers into [target-max_offset, target] in a memory image; returns {address, offset} pairs.",
+          "inputSchema": path_schema(json!({
+            "target": {"type":"integer","description":"address to find pointers to"},
+            "base": {"type":"integer","description":"address of byte 0 of the image (default 0)"},
+            "max_offset": {"type":"integer","description":"how far before target a pointer may land (default 0x1000)"},
+            "align": {"type":"integer","description":"pointer alignment (default 8)"},
+            "max": {"type":"integer"} })) },
         { "name": "strings", "description": "Extract ASCII/UTF-16 strings.",
           "inputSchema": path_schema(json!({
             "min_length": {"type":"integer","description":"default 4"},
@@ -766,6 +773,21 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let (pat, mask) = search::parse_hex_mask(pattern)?;
             let hits = search::find_all_masked(&doc, &pat, &mask, max);
             Ok(json!({ "matches": hits, "count": hits.len() }).to_string())
+        }
+        "find_pointers" => {
+            let target = args.get("target").and_then(|v| v.as_u64()).ok_or("missing 'target'")?;
+            let base = args.get("base").and_then(|v| v.as_u64()).unwrap_or(0);
+            let max_offset = args.get("max_offset").and_then(|v| v.as_u64()).unwrap_or(0x1000);
+            let align = args.get("align").and_then(|v| v.as_u64()).unwrap_or(8);
+            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(1000) as usize;
+            let hits = crate::ops::pointer::find_pointers_to(
+                &doc, base, target, max_offset, align, max, &Progress::default(),
+            );
+            let arr: Vec<Value> = hits
+                .iter()
+                .map(|(addr, off)| json!({"address": addr, "offset": off}))
+                .collect();
+            Ok(json!({ "pointers": arr, "count": arr.len() }).to_string())
         }
         "strings" => {
             let min = args.get("min_length").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
@@ -1057,6 +1079,21 @@ mod tests {
         })).unwrap();
         let text = dis["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("xor rax,rax"), "got {text}");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn find_pointers_tool() {
+        // two 64-bit pointers near target 0x1000
+        let mut data = Vec::new();
+        data.extend_from_slice(&0x1000u64.to_le_bytes());
+        data.extend_from_slice(&0x0FF0u64.to_le_bytes());
+        let p = tmpfile(&data);
+        let resp = call(&mut Server::new(), "find_pointers", json!({
+            "path": p.to_str().unwrap(), "target": 0x1000, "max_offset": 0x20
+        }));
+        assert_eq!(resp["count"], 2);
+        assert_eq!(resp["pointers"][1], json!({"address": 8, "offset": 0x10}));
         let _ = std::fs::remove_file(&p);
     }
 

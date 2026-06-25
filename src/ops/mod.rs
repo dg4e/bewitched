@@ -14,6 +14,7 @@ pub mod fileops;
 pub mod inspect;
 pub mod patch;
 pub mod pattern;
+pub mod pointer;
 pub mod scan;
 pub mod script;
 pub mod script_store;
