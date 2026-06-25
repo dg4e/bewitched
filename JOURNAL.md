@@ -620,6 +620,15 @@ driving the tools, a model does.
   agent. The script *library* (`script::LIBRARY`) is shared between the GUI's
   Library dropdown and the MCP tool, mirroring how `template::BUILTINS` is shared.
 
+- **A broad tool catalog.** The read side grew analysis tools (`histogram`,
+  `entropy_map`, `compare`, `decompress`) and carving (`carve`) on top of the
+  originals; the write side gained `compress`/`decompress`/`carve` alongside the
+  earlier write/patch/script tools. Each is still a thin adapter over an `ops`
+  function — e.g. `compress` reuses `ops::compress` (gzip/zlib/deflate via
+  `flate2`'s pure-Rust `miniz_oxide` backend, so still no C toolchain), `compare`
+  reuses `ops::diff`. New capability in the engine, exposed identically to the GUI
+  and to MCP, is the recurring pattern.
+
 - **Resources and prompts.** Beyond `tools`, the server implements MCP
   `resources` (the built-in templates, the script library, and reference lists —
   architectures / export formats / checksum algorithms — under `ganghex://` URIs)

@@ -68,7 +68,8 @@ blocks.
   and `write_*` (with endianness), `insert/remove`, `find_byte/find_str`,
   `count/sum/crc32/hex`, `to_upper/to_lower`, document context
   (`cursor/sel_start/doc_len/…`) and side effects (`set_cursor/add_region/
-  add_note`) — plus a **library** of built-in scripts (XOR, ROT13, reverse, …).
+  add_note`) — plus a **library** of built-in scripts (XOR, ROT13, reverse, …)
+  and **user-saved scripts** (`Save script`, persisted to the config dir).
 - **MCP server**: `ganghex --mcp` runs a Model Context Protocol server (JSON-RPC
   over stdio) advertising `tools`, `resources` and `prompts`. Read tools
   (read_hex, checksums, statistics, search, strings, signatures, disassemble,
@@ -90,6 +91,8 @@ blocks.
   click a pixel to jump.
 - **Transforms** on a selection: XOR/AND/OR/ADD/SUB/NOT, rotate, shift,
   reverse, byte-swap (endian) and ASCII case-flip.
+- **Compression**: decompress (auto-detecting gzip/zlib) or compress a
+  selection — gzip / zlib / raw deflate, pure Rust (no C dependency).
 - **String extraction**: streaming ASCII + UTF-16LE scan with click-to-jump.
 - **Signatures (binwalk)**: locate embedded file formats, archives, executables
   and crypto constants (AES S-box, SHA-256 constants).
@@ -120,7 +123,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (207 tests)
+cargo test                          # run the test suite (218 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -151,18 +154,20 @@ Point an MCP client at the binary:
 }
 ```
 
-Read tools: `read_hex`, `checksums`, `statistics`, `search`, `strings`,
-`signatures`, `disassemble` (14 architectures), `inspect`, `export`,
-`apply_template` — each takes a file/device `path` and returns JSON, e.g.
-`disassemble {path, offset, count, arch}`. Write tools: `write_bytes`,
-`transform`, `patch_create`, `patch_apply`, `script` (run Rhai over a range).
-Editing sessions: `open` returns a session id, then
+Read/analyze tools: `read_hex`, `checksums`, `statistics`, `histogram`,
+`entropy_map`, `search`, `strings`, `signatures`, `disassemble` (14
+architectures), `inspect`, `export`, `apply_template`, `compare` — each takes a
+file/device `path` and returns JSON, e.g. `disassemble {path, offset, count,
+arch}`. Write tools: `write_bytes`, `transform`, `patch_create`, `patch_apply`,
+`carve`, `decompress`, `compress`, `script` (run Rhai over a range). Editing
+sessions: `open` returns a session id, then
 `session_read/write/insert/delete/undo/save/script/close` edit it through the
 piece table (undoable; written on `session_save`).
 
-The server also serves **resources** (`ganghex://templates/…`,
-`ganghex://scripts/…`, `ganghex://reference/{architectures,formats,checksums}`)
-and **prompts** (`identify-file`, `analyze-binary`, `find-secrets`).
+The server also serves **resources** — built-in templates, built-in *and*
+user-saved scripts (`ganghex://scripts/…`), reference lists, and a `file://`
+template to read any file as a hex dump — plus **prompts** (`identify-file`,
+`analyze-binary`, `find-secrets`).
 
 ## Raw disk / RAM access
 
@@ -198,6 +203,8 @@ src/
     byteplot.rs byte-as-pixel visualization
     disasm.rs   multi-arch disasm (14 ISAs, pure Rust): x86/ARM/MIPS/PPC/RISC-V/MSP430/6502/SM83
     template.rs binary template DSL + interpreter + built-ins + field encode
+    compress.rs gzip/zlib/deflate (flate2, pure Rust)
+    script.rs / script_store.rs  Rhai scripting + user script library
     script.rs   sandboxed Rhai scripting over a byte buffer
     sidecar.rs  persistent annotations (.ghx): bookmarks/regions/notes
   mcp.rs        MCP (Model Context Protocol) server — ganghex --mcp
@@ -210,7 +217,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **207 tests**
+Engine, feature operations and GUI are implemented and covered by **218 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 
