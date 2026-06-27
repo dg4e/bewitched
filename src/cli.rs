@@ -5,7 +5,7 @@
 //! reuse the same `ops` engine as the GUI and MCP server.
 
 use crate::data::Document;
-use crate::ops::{checksum, compress, disasm, export, pointer, scan, search, signatures, stats, strings, Progress};
+use crate::ops::{checksum, compress, disasm, export, patch, pointer, scan, search, signatures, stats, strings, Progress};
 
 /// Result of parsing argv: either a CLI command to run, or "not a CLI command"
 /// (so the caller falls through to the GUI / MCP paths).
@@ -39,6 +39,7 @@ Headless commands (read FILE, print to stdout):
   ganghex pointers FILE TARGET [MAXOFF]    find 64-bit pointers to TARGET
   ganghex export FILE FORMAT [OFF] [LEN]   export (e.g. 'C source', base64)
   ganghex gunzip FILE                      decompress (auto-detect) to stdout
+  ganghex bps    ORIG MOD OUT              create a BPS patch ORIG→MOD
   ganghex --help | --version
 ";
 
@@ -67,13 +68,25 @@ fn is_command(s: &str) -> bool {
         s,
         "dump" | "sha256" | "md5" | "sha1" | "sha512" | "crc32" | "sum" | "strings" | "search"
             | "find" | "stats" | "scan" | "sigs" | "disasm" | "pointers" | "export" | "gunzip"
-            | "help" | "--help" | "-h"
+            | "bps" | "help" | "--help" | "-h"
     )
 }
 
 fn run(cmd: &str, args: &[String]) -> Result<(), String> {
     if cmd == "help" || cmd == "--help" || cmd == "-h" {
         print!("{USAGE}");
+        return Ok(());
+    }
+    // bps takes three file paths rather than the standard single FILE.
+    if cmd == "bps" {
+        let orig = args.first().ok_or("usage: bps ORIG MOD OUT")?;
+        let modi = args.get(1).ok_or("usage: bps ORIG MOD OUT")?;
+        let outp = args.get(2).ok_or("usage: bps ORIG MOD OUT")?;
+        let a = std::fs::read(orig).map_err(|e| format!("read {orig}: {e}"))?;
+        let b = std::fs::read(modi).map_err(|e| format!("read {modi}: {e}"))?;
+        let p = patch::make_bps(&a, &b);
+        std::fs::write(outp, &p).map_err(|e| format!("write {outp}: {e}"))?;
+        eprintln!("wrote {} bytes", p.len());
         return Ok(());
     }
     let path = args.first().ok_or("missing FILE argument")?;

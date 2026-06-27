@@ -115,6 +115,152 @@ pub fn apply_to_vec(target: &mut Vec<u8>, writes: &[IpsWrite]) {
     }
 }
 
+// ============================== BPS ========================================
+//
+// BPS is the modern successor to IPS: it handles files of any size, and embeds
+// CRC-32 checksums of the source, target and the patch itself for validation.
+// The format: "BPS1", source-size, target-size, metadata-size (+ metadata),
+// then a stream of actions, then source-CRC, target-CRC, patch-CRC (LE u32).
+//
+// Each action is a varint `(length-1) << 2 | command`:
+//   0 SourceRead  copy `length` bytes from source at the output position
+//   1 TargetRead  copy `length` literal bytes that follow
+//   2 SourceCopy  signed-varint relative move of a source cursor, then copy
+//   3 TargetCopy  signed-varint relative move of a target cursor, then copy
+//
+// We always *create* patches using only TargetRead (a literal of the whole
+// target) — simple and correct, though not maximally compact — but we *apply*
+// all four actions, so patches produced by other tools (Flips, beat) work.
+
+fn bps_encode_varint(out: &mut Vec<u8>, mut n: u64) {
+    loop {
+        let x = (n & 0x7f) as u8;
+        n >>= 7;
+        if n == 0 {
+            out.push(0x80 | x);
+            break;
+        }
+        out.push(x);
+        n -= 1;
+    }
+}
+
+fn bps_decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
+    let mut result = 0u64;
+    let mut shift = 0u64;
+    loop {
+        let b = *data.get(*pos).ok_or("truncated varint")?;
+        *pos += 1;
+        result += ((b & 0x7f) as u64) << shift;
+        if b & 0x80 != 0 {
+            return Ok(result);
+        }
+        shift += 7;
+        result += 1u64 << shift;
+    }
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    crc32fast::hash(data)
+}
+
+/// Build a BPS patch turning `source` into `target` (literal TargetRead body).
+pub fn make_bps(source: &[u8], target: &[u8]) -> Vec<u8> {
+    let mut out = Vec::from(*b"BPS1");
+    bps_encode_varint(&mut out, source.len() as u64);
+    bps_encode_varint(&mut out, target.len() as u64);
+    bps_encode_varint(&mut out, 0); // no metadata
+    if !target.is_empty() {
+        // one TargetRead action covering the entire target
+        bps_encode_varint(&mut out, ((target.len() as u64 - 1) << 2) | 1);
+        out.extend_from_slice(target);
+    }
+    for v in [crc32(source), crc32(target)] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    let patch_crc = crc32(&out);
+    out.extend_from_slice(&patch_crc.to_le_bytes());
+    out
+}
+
+/// Apply a BPS patch to `source`, producing the target. Validates the source and
+/// target CRC-32s embedded in the patch.
+pub fn apply_bps(patch: &[u8], source: &[u8]) -> Result<Vec<u8>, String> {
+    if patch.len() < 4 + 12 || &patch[..4] != b"BPS1" {
+        return Err("not a BPS patch".into());
+    }
+    let body_end = patch.len() - 12;
+    let src_crc = u32::from_le_bytes(patch[body_end..body_end + 4].try_into().unwrap());
+    let tgt_crc = u32::from_le_bytes(patch[body_end + 4..body_end + 8].try_into().unwrap());
+    if crc32(source) != src_crc {
+        return Err("source CRC mismatch (wrong base file)".into());
+    }
+
+    let mut pos = 4;
+    let _source_size = bps_decode_varint(patch, &mut pos)?;
+    let target_size = bps_decode_varint(patch, &mut pos)? as usize;
+    let meta_size = bps_decode_varint(patch, &mut pos)? as usize;
+    pos += meta_size;
+
+    let mut out = Vec::with_capacity(target_size);
+    let mut source_rel: i64 = 0;
+    let mut target_rel: i64 = 0;
+
+    while pos < body_end {
+        let action = bps_decode_varint(patch, &mut pos)?;
+        let len = (action >> 2) as usize + 1;
+        match action & 3 {
+            0 => {
+                // SourceRead at the current output offset
+                let start = out.len();
+                for i in 0..len {
+                    let b = *source.get(start + i).ok_or("SourceRead out of range")?;
+                    out.push(b);
+                }
+            }
+            1 => {
+                // TargetRead: literal bytes from the patch
+                for _ in 0..len {
+                    let b = *patch.get(pos).ok_or("TargetRead out of range")?;
+                    pos += 1;
+                    out.push(b);
+                }
+            }
+            2 => {
+                let raw = bps_decode_varint(patch, &mut pos)?;
+                let delta = if raw & 1 != 0 { -((raw >> 1) as i64) } else { (raw >> 1) as i64 };
+                source_rel += delta;
+                for _ in 0..len {
+                    let idx = usize::try_from(source_rel).map_err(|_| "negative source offset")?;
+                    let b = *source.get(idx).ok_or("SourceCopy out of range")?;
+                    out.push(b);
+                    source_rel += 1;
+                }
+            }
+            3 => {
+                let raw = bps_decode_varint(patch, &mut pos)?;
+                let delta = if raw & 1 != 0 { -((raw >> 1) as i64) } else { (raw >> 1) as i64 };
+                target_rel += delta;
+                for _ in 0..len {
+                    let idx = usize::try_from(target_rel).map_err(|_| "negative target offset")?;
+                    let b = *out.get(idx).ok_or("TargetCopy out of range")?;
+                    out.push(b);
+                    target_rel += 1;
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    if out.len() != target_size {
+        return Err(format!("target size mismatch ({} vs {target_size})", out.len()));
+    }
+    if crc32(&out) != tgt_crc {
+        return Err("target CRC mismatch (corrupt patch)".into());
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +319,49 @@ mod tests {
     fn rejects_oversize() {
         let big = vec![0u8; (MAX_OFF + 2) as usize];
         assert!(make_ips(&[], &big).is_err());
+    }
+
+    #[test]
+    fn bps_roundtrip() {
+        let source = b"the quick brown fox jumps over the lazy dog".to_vec();
+        let mut target = source.clone();
+        target.extend_from_slice(b" -- and then some extra trailing bytes");
+        target[4] = b'Q';
+        let patch = make_bps(&source, &target);
+        assert_eq!(&patch[..4], b"BPS1");
+        let back = apply_bps(&patch, &source).unwrap();
+        assert_eq!(back, target);
+    }
+
+    #[test]
+    fn bps_rejects_wrong_source() {
+        let patch = make_bps(b"original", b"modified");
+        assert!(apply_bps(&patch, b"WRONG BASE").unwrap_err().contains("source CRC"));
+    }
+
+    #[test]
+    fn bps_varint_roundtrip() {
+        for n in [0u64, 1, 127, 128, 255, 16384, 1_000_000, u32::MAX as u64] {
+            let mut buf = Vec::new();
+            bps_encode_varint(&mut buf, n);
+            let mut pos = 0;
+            assert_eq!(bps_decode_varint(&buf, &mut pos).unwrap(), n, "varint {n}");
+            assert_eq!(pos, buf.len());
+        }
+    }
+
+    #[test]
+    fn bps_detects_corruption() {
+        let mut patch = make_bps(b"aaaa", b"bbbb");
+        // corrupt a literal byte in the body
+        patch[12] ^= 0xFF;
+        assert!(apply_bps(&patch, b"aaaa").is_err());
+    }
+
+    #[test]
+    fn bps_empty_target() {
+        let patch = make_bps(b"abc", b"");
+        assert_eq!(apply_bps(&patch, b"abc").unwrap(), b"");
     }
 
     #[test]

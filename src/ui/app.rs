@@ -945,6 +945,57 @@ impl App {
         }
     }
 
+    fn create_bps(&mut self) {
+        let Some(orig_path) = rfd::FileDialog::new()
+            .set_title("Pick the ORIGINAL (unpatched) file")
+            .pick_file()
+        else {
+            return;
+        };
+        let original = match std::fs::read(&orig_path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("read failed: {e}");
+                return;
+            }
+        };
+        let modified = self.doc.to_vec();
+        let p = patch::make_bps(&original, &modified);
+        if let Some(out) = rfd::FileDialog::new().add_filter("BPS", &["bps"]).save_file() {
+            match std::fs::write(&out, &p) {
+                Ok(()) => self.status = format!("wrote BPS patch ({} bytes)", p.len()),
+                Err(e) => self.status = format!("write failed: {e}"),
+            }
+        }
+    }
+
+    fn apply_bps(&mut self) {
+        let Some(patch_path) = rfd::FileDialog::new()
+            .add_filter("BPS", &["bps"])
+            .set_title("Pick a BPS patch")
+            .pick_file()
+        else {
+            return;
+        };
+        let bytes = match std::fs::read(&patch_path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("read failed: {e}");
+                return;
+            }
+        };
+        // BPS validates the source CRC; apply to the current document bytes.
+        let source = self.doc.to_vec();
+        match patch::apply_bps(&bytes, &source) {
+            Ok(target) => {
+                self.doc.replace(0, self.doc.len(), &target);
+                self.status = format!("applied BPS patch → {} bytes", target.len());
+                self.scroll_to_cursor = true;
+            }
+            Err(e) => self.status = format!("invalid patch: {e}"),
+        }
+    }
+
     // ---- signature scan & entropy map ----
 
     fn do_signatures(&mut self) {

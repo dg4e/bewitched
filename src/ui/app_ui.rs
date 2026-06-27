@@ -108,6 +108,14 @@ impl App {
                     self.apply_ips();
                     ui.close_menu();
                 }
+                if ui.button("Create BPS patch…   (diff vs original)").clicked() {
+                    self.create_bps();
+                    ui.close_menu();
+                }
+                if ui.button("Apply BPS patch…").clicked() {
+                    self.apply_bps();
+                    ui.close_menu();
+                }
                 ui.separator();
                 if ui.button("Save annotations (.ghx)").clicked() {
                     self.save_annotations();

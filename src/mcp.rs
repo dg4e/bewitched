@@ -276,6 +276,25 @@ impl Server {
                 })
                 .to_string())
             }
+            "bps_create" => {
+                let orig = args.get("original").and_then(|p| p.as_str()).ok_or("missing 'original'")?;
+                let modi = args.get("modified").and_then(|p| p.as_str()).ok_or("missing 'modified'")?;
+                let outp = args.get("output").and_then(|p| p.as_str()).ok_or("missing 'output'")?;
+                let a = std::fs::read(orig).map_err(|e| format!("read original: {e}"))?;
+                let b = std::fs::read(modi).map_err(|e| format!("read modified: {e}"))?;
+                let p = patch::make_bps(&a, &b);
+                std::fs::write(outp, &p).map_err(|e| format!("write patch: {e}"))?;
+                Ok(json!({ "patch_bytes": p.len() }).to_string())
+            }
+            "bps_apply" => {
+                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let patch_path = args.get("patch").and_then(|p| p.as_str()).ok_or("missing 'patch'")?;
+                let bytes = std::fs::read(patch_path).map_err(|e| format!("read patch: {e}"))?;
+                let source = std::fs::read(path).map_err(|e| format!("read source: {e}"))?;
+                let target = patch::apply_bps(&bytes, &source)?;
+                std::fs::write(path, &target).map_err(|e| format!("save failed: {e}"))?;
+                Ok(json!({ "bytes": target.len() }).to_string())
+            }
             "decompress" => {
                 let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
                 let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
@@ -661,6 +680,11 @@ fn tools_list() -> Value {
             "original": {"type":"string"}, "modified": {"type":"string"}, "output": {"type":"string"} } }) },
         { "name": "patch_apply", "description": "Apply an IPS patch to a file and save.",
           "inputSchema": path_schema(json!({ "patch": {"type":"string","description":"path to .ips patch"} })) },
+        { "name": "bps_create", "description": "Diff two files into a BPS patch (any size, CRC-checked).",
+          "inputSchema": json!({ "type":"object", "required":["original","modified","output"], "properties": {
+            "original": {"type":"string"}, "modified": {"type":"string"}, "output": {"type":"string"} } }) },
+        { "name": "bps_apply", "description": "Apply a BPS patch to a file and save (validates source/target CRC).",
+          "inputSchema": path_schema(json!({ "patch": {"type":"string","description":"path to .bps patch"} })) },
         { "name": "script", "description": "Run a Rhai script over a file range and save (read/write/len/typed accessors/find/crc32/add_region/add_note/...).",
           "inputSchema": path_schema(json!({
             "source": {"type":"string","description":"Rhai source"},
@@ -1115,6 +1139,29 @@ mod tests {
         assert_eq!(carved["carved"], 2);
         assert_eq!(std::fs::read(&out).unwrap(), b"BB");
         for f in [a, b, out] { let _ = std::fs::remove_file(&f); }
+    }
+
+    #[test]
+    fn bps_create_and_apply_tools() {
+        let orig = tmpfile(b"the quick brown fox");
+        let modi = tmpfile(b"the QUICK brown fox!");
+        let patch = tmpfile(b"");
+        let mut s = Server::new();
+        let made = call(&mut s, "bps_create", json!({
+            "original": orig.to_str().unwrap(),
+            "modified": modi.to_str().unwrap(),
+            "output": patch.to_str().unwrap(),
+        }));
+        assert!(made["patch_bytes"].as_u64().unwrap() > 16);
+        // apply onto a copy of the original
+        let target = tmpfile(b"the quick brown fox");
+        let applied = call(&mut s, "bps_apply", json!({
+            "path": target.to_str().unwrap(),
+            "patch": patch.to_str().unwrap(),
+        }));
+        assert_eq!(applied["bytes"], 20);
+        assert_eq!(std::fs::read(&target).unwrap(), b"the QUICK brown fox!");
+        for f in [orig, modi, patch, target] { let _ = std::fs::remove_file(&f); }
     }
 
     #[test]
