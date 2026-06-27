@@ -9,17 +9,18 @@ use app::App;
 use std::path::PathBuf;
 
 pub fn run() -> eframe::Result<()> {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+
+    // Headless CLI subcommands (dump/sha256/disasm/...) run and exit.
+    if let crate::cli::Mode::Run(code) = crate::cli::dispatch(&argv) {
+        std::process::exit(code);
+    }
+
     // CLI: an optional file/device path to open on startup. `--help`/`--version`
     // print and exit without launching the GUI.
     let mut startup: Option<PathBuf> = None;
-    for arg in std::env::args().skip(1) {
+    for arg in &argv {
         match arg.as_str() {
-            "--help" | "-h" => {
-                println!("ganghex — a fast, cross-platform hex editor");
-                println!("usage: ganghex [FILE|DEVICE]");
-                println!("       ganghex --mcp        run as an MCP (Model Context Protocol) server");
-                return Ok(());
-            }
             "--version" | "-V" => {
                 println!("ganghex {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());

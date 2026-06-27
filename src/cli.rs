@@ -1,0 +1,334 @@
+//! Headless command-line mode for scripting and pipelines.
+//!
+//! Invoked when ganghex is run with a recognized subcommand (anything other than
+//! a bare file path or `--mcp`). Returns the process exit code. All operations
+//! reuse the same `ops` engine as the GUI and MCP server.
+
+use crate::data::Document;
+use crate::ops::{checksum, compress, disasm, export, pointer, scan, search, signatures, stats, strings, Progress};
+
+/// Result of parsing argv: either a CLI command to run, or "not a CLI command"
+/// (so the caller falls through to the GUI / MCP paths).
+pub enum Mode {
+    /// Run this CLI command and exit with the returned code.
+    Run(i32),
+    /// Not a CLI invocation; continue to GUI.
+    NotCli,
+}
+
+const USAGE: &str = "\
+ganghex — hex editor & binary analysis
+
+GUI:
+  ganghex [FILE|DEVICE]         open the editor (optionally on a file/device)
+
+MCP server:
+  ganghex --mcp                 run as a Model Context Protocol server (stdio)
+
+Headless commands (read FILE, print to stdout):
+  ganghex dump   FILE [OFF] [LEN]          hex dump
+  ganghex sha256 FILE                      SHA-256 (also: md5 sha1 sha512 crc32)
+  ganghex sum    FILE [ALGO...]            one or more digests
+  ganghex strings FILE [MINLEN]            extract ASCII/UTF-16 strings
+  ganghex search FILE PATTERN              wildcard hex search, e.g. 'DE ?? EF'
+  ganghex find   FILE TEXT                 plain text search
+  ganghex stats  FILE                      entropy + classification
+  ganghex scan   FILE TYPE VALUE           value scan (i32/f32/text/hex/...)
+  ganghex sigs   FILE                      detect embedded formats (binwalk)
+  ganghex disasm FILE ARCH [OFF] [COUNT]   disassemble
+  ganghex pointers FILE TARGET [MAXOFF]    find 64-bit pointers to TARGET
+  ganghex export FILE FORMAT [OFF] [LEN]   export (e.g. 'C source', base64)
+  ganghex gunzip FILE                      decompress (auto-detect) to stdout
+  ganghex --help | --version
+";
+
+/// Inspect argv (excluding the program name) and decide whether this is a CLI run.
+pub fn dispatch(args: &[String]) -> Mode {
+    let Some(cmd) = args.first() else {
+        return Mode::NotCli;
+    };
+    // A bare path or the GUI/MCP flags are handled elsewhere.
+    if cmd == "--mcp" || !is_command(cmd) {
+        return Mode::NotCli;
+    }
+    let rest = &args[1..];
+    let code = match run(cmd, rest) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("ganghex: {e}");
+            1
+        }
+    };
+    Mode::Run(code)
+}
+
+fn is_command(s: &str) -> bool {
+    matches!(
+        s,
+        "dump" | "sha256" | "md5" | "sha1" | "sha512" | "crc32" | "sum" | "strings" | "search"
+            | "find" | "stats" | "scan" | "sigs" | "disasm" | "pointers" | "export" | "gunzip"
+            | "help" | "--help" | "-h"
+    )
+}
+
+fn run(cmd: &str, args: &[String]) -> Result<(), String> {
+    if cmd == "help" || cmd == "--help" || cmd == "-h" {
+        print!("{USAGE}");
+        return Ok(());
+    }
+    let path = args.first().ok_or("missing FILE argument")?;
+    let doc = Document::open_file(path).map_err(|e| format!("open {path}: {e}"))?;
+    let total = doc.len();
+
+    match cmd {
+        "dump" => {
+            let off = parse_u64(args.get(1)).unwrap_or(0);
+            let len = parse_u64(args.get(2)).unwrap_or(256);
+            print!("{}", export::export(&doc, off, len, export::Format::PlainHexDump));
+        }
+        "sha256" | "md5" | "sha1" | "sha512" | "crc32" => {
+            let algo = digest_algo(cmd).unwrap();
+            let r = checksum::compute(&doc, 0, total, &[algo], &Progress::default());
+            println!("{}  {}", r[0].1, path);
+        }
+        "sum" => {
+            let algos: Vec<checksum::Algo> = if args.len() > 1 {
+                args[1..]
+                    .iter()
+                    .map(|a| digest_algo(a).ok_or(format!("unknown algorithm '{a}'")))
+                    .collect::<Result<_, _>>()?
+            } else {
+                vec![checksum::Algo::Md5, checksum::Algo::Sha1, checksum::Algo::Sha256]
+            };
+            let r = checksum::compute(&doc, 0, total, &algos, &Progress::default());
+            for (a, v) in r {
+                println!("{:<12} {}", a.name(), v);
+            }
+        }
+        "strings" => {
+            let min = parse_u64(args.get(1)).unwrap_or(4) as usize;
+            let found = strings::extract(&doc, 0, total, min.max(1), 1_000_000, &Progress::default());
+            for f in found {
+                println!("{:#010X}  {}", f.offset, f.text);
+            }
+        }
+        "search" => {
+            let pat = args.get(1).ok_or("missing PATTERN")?;
+            let (bytes, mask) = search::parse_hex_mask(pat)?;
+            let hits = search::find_all_masked(&doc, &bytes, &mask, 1_000_000);
+            for h in &hits {
+                println!("{h:#010X}");
+            }
+            eprintln!("{} match(es)", hits.len());
+        }
+        "find" => {
+            let text = args.get(1).ok_or("missing TEXT")?;
+            let needle = text.as_bytes();
+            let mut from = 0u64;
+            let mut count = 0;
+            while let Some(o) = search::find(&doc, needle, from, search::Direction::Forward, false) {
+                println!("{o:#010X}");
+                from = o + 1;
+                count += 1;
+            }
+            eprintln!("{count} match(es)");
+        }
+        "stats" => {
+            let s = stats::analyze(&doc, 0, total, &Progress::default());
+            println!("bytes:          {}", s.total);
+            println!("entropy:        {:.4} bits/byte", s.entropy);
+            println!("classification: {}", s.classify());
+            if let Some((b, c)) = s.most_common() {
+                println!("most common:    {b:#04X} ({c} times)");
+            }
+        }
+        "scan" => {
+            let ty = parse_scan_type(args.get(1).map(|s| s.as_str()).unwrap_or(""))?;
+            let value = args.get(2).ok_or("missing VALUE")?;
+            let needle = search::needle_bytes(value, ty, search::Endian::Little, false)?;
+            let m = scan::first_scan(&doc, &needle, needle.len() as u64, 1_000_000, &Progress::default());
+            for hit in &m {
+                println!("{:#010X}", hit.offset);
+            }
+            eprintln!("{} match(es)", m.len());
+        }
+        "sigs" => {
+            let hits = signatures::scan(&doc, 0, total, 100_000, &Progress::default());
+            for h in hits {
+                println!("{:#010X}  {:<12} {}", h.offset, h.category.label(), h.name);
+            }
+        }
+        "disasm" => {
+            let arch = parse_arch(args.get(1).map(|s| s.as_str()).unwrap_or("x86-64"))?;
+            let off = parse_u64(args.get(2)).unwrap_or(0);
+            let count = parse_u64(args.get(3)).unwrap_or(32) as usize;
+            for i in disasm::disassemble(&doc, off, count, arch) {
+                let bytes: String = i.bytes.iter().map(|b| format!("{b:02x}")).collect();
+                println!("{:#010X}  {:<20} {}", i.offset, bytes, i.text);
+            }
+        }
+        "pointers" => {
+            let target = parse_u64(args.get(1)).ok_or("missing TARGET address")?;
+            let max_off = parse_u64(args.get(2)).unwrap_or(0x1000);
+            let hits = pointer::find_pointers_to(&doc, 0, target, max_off, 8, 1_000_000, &Progress::default());
+            for (addr, off) in &hits {
+                println!("{addr:#010X}  +{off:#X}");
+            }
+            eprintln!("{} pointer(s)", hits.len());
+        }
+        "export" => {
+            let fmt = parse_format(args.get(1).map(|s| s.as_str()).unwrap_or(""))?;
+            let off = parse_u64(args.get(2)).unwrap_or(0);
+            let len = parse_u64(args.get(3)).unwrap_or(total.saturating_sub(off));
+            print!("{}", export::export(&doc, off, len, fmt));
+        }
+        "gunzip" => {
+            use std::io::Write;
+            let data = doc.read_range(0, total as usize);
+            let codec = compress::detect(&data).ok_or("could not detect gzip/zlib header")?;
+            let out = compress::decompress(&data, codec)?;
+            std::io::stdout().write_all(&out).map_err(|e| e.to_string())?;
+        }
+        _ => return Err(format!("unknown command '{cmd}' (try --help)")),
+    }
+    Ok(())
+}
+
+fn parse_u64(s: Option<&String>) -> Option<u64> {
+    let s = s?.trim();
+    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(h, 16).ok()
+    } else {
+        s.parse().ok()
+    }
+}
+
+fn digest_algo(name: &str) -> Option<checksum::Algo> {
+    Some(match name.to_lowercase().as_str() {
+        "md5" => checksum::Algo::Md5,
+        "sha1" => checksum::Algo::Sha1,
+        "sha256" => checksum::Algo::Sha256,
+        "sha512" => checksum::Algo::Sha512,
+        "crc32" => checksum::Algo::Crc32,
+        "crc64" => checksum::Algo::Crc64,
+        "adler32" => checksum::Algo::Adler32,
+        _ => return None,
+    })
+}
+
+fn parse_scan_type(s: &str) -> Result<search::DataType, String> {
+    use search::DataType::*;
+    Ok(match s.to_lowercase().as_str() {
+        "text" => Text,
+        "hex" => Hex,
+        "i8" => I8,
+        "i16" => I16,
+        "i32" => I32,
+        "i64" => I64,
+        "f32" => F32,
+        "f64" => F64,
+        other => return Err(format!("unknown scan type '{other}'")),
+    })
+}
+
+fn parse_arch(s: &str) -> Result<disasm::Arch, String> {
+    use disasm::Arch::*;
+    Ok(match s.to_lowercase().replace(['_', ' '], "-").as_str() {
+        "x86-16" => X86_16,
+        "x86-32" | "x86" => X86_32,
+        "x86-64" | "x64" => X86_64,
+        "arm" => Arm,
+        "thumb" => ArmThumb,
+        "aarch64" | "arm64" => Aarch64,
+        "mips" | "mips-le" => MipsLe,
+        "mips-be" => MipsBe,
+        "powerpc" | "ppc" => PowerPc,
+        "riscv32" => RiscV32,
+        "riscv64" | "riscv" => RiscV64,
+        "msp430" => Msp430,
+        "6502" => M6502,
+        "sm83" => Sm83,
+        other => return Err(format!("unknown arch '{other}'")),
+    })
+}
+
+fn parse_format(s: &str) -> Result<export::Format, String> {
+    let n = s.to_lowercase();
+    export::Format::ALL
+        .iter()
+        .find(|f| f.name().to_lowercase() == n || f.extension() == n)
+        .or_else(|| export::Format::ALL.iter().find(|f| f.name().to_lowercase().contains(&n)))
+        .copied()
+        .ok_or_else(|| format!("unknown export format '{s}'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmpfile(bytes: &[u8]) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static C: AtomicU64 = AtomicU64::new(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!("ganghex_cli_{:?}_{}.bin", std::thread::current().id(), C.fetch_add(1, Ordering::Relaxed)));
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    #[test]
+    fn is_command_recognizes_subcommands() {
+        assert!(is_command("sha256"));
+        assert!(is_command("disasm"));
+        assert!(!is_command("/tmp/file.bin"));
+        assert!(!is_command("--mcp"));
+    }
+
+    #[test]
+    fn dispatch_non_command_is_notcli() {
+        assert!(matches!(dispatch(&["somefile.bin".into()]), Mode::NotCli));
+        assert!(matches!(dispatch(&["--mcp".into()]), Mode::NotCli));
+        assert!(matches!(dispatch(&[]), Mode::NotCli));
+    }
+
+    #[test]
+    fn sha256_command_runs() {
+        let p = tmpfile(b"abc");
+        let r = run("sha256", &[p.to_string_lossy().into_owned()]);
+        assert!(r.is_ok());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn search_wildcard_and_pointers() {
+        let mut data = vec![0u8; 8];
+        data.extend_from_slice(&0x1000u64.to_le_bytes());
+        let p = tmpfile(&data);
+        let path = p.to_string_lossy().into_owned();
+        assert!(run("pointers", &[path.clone(), "0x1000".into()]).is_ok());
+        assert!(run("search", &[path.clone(), "00 ?? 00".into()]).is_ok());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn unknown_format_errors() {
+        let p = tmpfile(b"x");
+        let r = run("export", &[p.to_string_lossy().into_owned(), "nonsense".into()]);
+        assert!(r.is_err());
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn missing_file_errors() {
+        assert!(run("sha256", &["/no/such/file".into()]).is_err());
+        assert!(run("sha256", &[]).is_err());
+    }
+
+    #[test]
+    fn parse_helpers() {
+        assert_eq!(parse_u64(Some(&"0x10".to_string())), Some(16));
+        assert_eq!(parse_u64(Some(&"255".to_string())), Some(255));
+        assert!(parse_arch("aarch64").is_ok());
+        assert!(parse_scan_type("i32").is_ok());
+        assert!(digest_algo("sha512").is_some());
+    }
+}

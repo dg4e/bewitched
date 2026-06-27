@@ -3,6 +3,7 @@
 //! Library crate holding the engine (`data`), feature operations (`ops`) and
 //! the GUI (`ui`). The binary in `main.rs` is a thin shell around [`ui::run`].
 
+pub mod cli;
 pub mod data;
 pub mod mcp;
 pub mod ops;
