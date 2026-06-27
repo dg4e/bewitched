@@ -647,6 +647,12 @@ fn tools_list() -> Value {
             "max_offset": {"type":"integer","description":"how far before target a pointer may land (default 0x1000)"},
             "align": {"type":"integer","description":"pointer alignment (default 8)"},
             "max": {"type":"integer"} })) },
+        { "name": "pointer_chains", "description": "Find multi-level pointer chains static_base→…→target (returns {base, offsets}).",
+          "inputSchema": path_schema(json!({
+            "target": {"type":"integer"}, "base": {"type":"integer","description":"image base (default 0)"},
+            "static_base": {"type":"integer"}, "static_window": {"type":"integer"},
+            "max_offset": {"type":"integer"}, "max_depth": {"type":"integer","description":"default 3"},
+            "max": {"type":"integer"} })) },
         { "name": "strings", "description": "Extract ASCII/UTF-16 strings.",
           "inputSchema": path_schema(json!({
             "min_length": {"type":"integer","description":"default 4"},
@@ -831,6 +837,24 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
                 .map(|(addr, off)| json!({"address": addr, "offset": off}))
                 .collect();
             Ok(json!({ "pointers": arr, "count": arr.len() }).to_string())
+        }
+        "pointer_chains" => {
+            let target = args.get("target").and_then(|v| v.as_u64()).ok_or("missing 'target'")?;
+            let base = args.get("base").and_then(|v| v.as_u64()).unwrap_or(0);
+            let static_base = args.get("static_base").and_then(|v| v.as_u64()).unwrap_or(0);
+            let static_window = args.get("static_window").and_then(|v| v.as_u64()).unwrap_or(0x10000);
+            let max_offset = args.get("max_offset").and_then(|v| v.as_u64()).unwrap_or(0x400);
+            let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
+            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+            let chains = crate::ops::pointer::find_chains(
+                &doc, base, target, static_base, static_window, max_offset, max_depth, max,
+                &Progress::default(),
+            );
+            let arr: Vec<Value> = chains
+                .iter()
+                .map(|c| json!({"base": c.base, "offsets": c.offsets}))
+                .collect();
+            Ok(json!({ "chains": arr, "count": arr.len() }).to_string())
         }
         "strings" => {
             let min = args.get("min_length").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
@@ -1137,6 +1161,19 @@ mod tests {
         }));
         assert_eq!(resp["count"], 2);
         assert_eq!(resp["pointers"][1], json!({"address": 8, "offset": 0x10}));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn pointer_chains_tool() {
+        let d = 0x1000u64.to_le_bytes();
+        let p = tmpfile(&d);
+        let resp = call(&mut Server::new(), "pointer_chains", json!({
+            "path": p.to_str().unwrap(), "target": 0x1010, "static_base": 0,
+            "static_window": 0, "max_offset": 0x20, "max_depth": 1
+        }));
+        assert_eq!(resp["count"], 1);
+        assert_eq!(resp["chains"][0]["offsets"], json!([0x10]));
         let _ = std::fs::remove_file(&p);
     }
 
