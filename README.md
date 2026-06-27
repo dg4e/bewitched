@@ -44,7 +44,8 @@ blocks.
   from-start, case-insensitive, streaming (never loads the whole file). Hex
   patterns support **`?` wildcards** (AOB scans), e.g. `DE ?? BE EF`.
 - **Checksums & digests**: Checksum-8/16/32, Adler-32, CRC-16, CRC-32, CRC-64,
-  MD5, SHA-1, SHA-256, SHA-512 — computed in one streaming pass.
+  MD5, SHA-1, SHA-256, SHA-512 — computed in one streaming pass; plus a
+  **custom CRC** (Rocksoft model: any width/poly/init/refin/refout/xorout).
 - **Statistics**: byte/character distribution chart, Shannon entropy, a
   data-type classification hint, and a sampled **entropy map** strip (click to
   jump) for spotting compressed/encrypted regions.
@@ -61,8 +62,9 @@ blocks.
   refine (equal / changed / unchanged / increased / decreased) as the data
   changes — the "Cheat Engine" workflow — plus "write value to all matches" and
   **❄ freeze** (continuously re-poke a value into the live process).
-- **Pointer scanning**: find 64-bit pointers that reference a target address —
-  the primitive behind pointer maps (MCP `find_pointers`).
+- **Pointer scanning**: find 64-bit pointers that reference a target address
+  (Tools ▸ Pointer scan), and **multi-level pointer chains** static→…→target
+  (MCP `find_pointers` / `pointer_chains`).
 - **Binary templates**: a small DSL parses a file into named, typed,
   click-to-jump fields you can **edit by value** and write back; built-ins for
   BMP/PNG/ELF/WAV/GIF.
@@ -99,8 +101,9 @@ blocks.
 - **String extraction**: streaming ASCII + UTF-16LE scan with click-to-jump.
 - **Signatures (binwalk)**: locate embedded file formats, archives, executables
   and crypto constants (AES S-box, SHA-256 constants).
-- **IPS patches**: create a patch by diffing against an original, or apply one —
-  the standard format for sharing ROM/save mods.
+- **IPS & BPS patches**: create a patch by diffing against an original, or apply
+  one — IPS (classic, ≤16 MiB) and BPS (any size, CRC-validated). Standard
+  formats for sharing ROM/save mods.
 - **Checksum repair**: write a computed digest back at the cursor to fix
   checksum fields after editing.
 - **Export** (25 formats): C / C++ / Pascal / Java / C# / VB.NET / Python /
@@ -126,10 +129,27 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (226 tests)
+cargo test                          # run the test suite (244 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
+
+### Headless CLI
+
+A subcommand turns ganghex into a scriptable analysis tool (no GUI):
+
+```sh
+ganghex sha256 file.bin                  # also: md5 sha1 sha512 crc32 sum
+ganghex dump   file.bin 0x40 256         # hex dump a range
+ganghex strings file.bin 6               # extract strings (min length 6)
+ganghex search file.bin 'DE ?? BE EF'    # wildcard byte search
+ganghex disasm file.bin aarch64 0 40     # disassemble
+ganghex sigs   firmware.bin              # binwalk-style signature scan
+ganghex pointers dump.bin 0x140001000    # find pointers to an address
+ganghex crc    file.bin 32 0x04C11DB7 0xFFFFFFFF rr 0xFFFFFFFF
+ganghex bps    orig.bin mod.bin out.bps  # create a BPS patch
+ganghex --help                           # full command list
+```
 
 ### Editions / packaging
 
@@ -160,7 +180,7 @@ Point an MCP client at the binary:
 Read/analyze tools: `read_hex`, `checksums`, `statistics`, `histogram`,
 `entropy_map`, `search`, `search_pattern` (wildcards), `find_pointers`,
 `strings`, `signatures`, `disassemble` (14 architectures), `inspect`, `export`,
-`apply_template`, `compare` — each takes a file/device `path` and returns JSON,
+`apply_template`, `compare`, `custom_crc`, `pointer_chains` — each takes a file/device `path` and returns JSON,
 e.g. `disassemble {path, offset, count, arch}`. Write tools: `write_bytes`,
 `transform`, `patch_create`, `patch_apply`, `carve`, `decompress`, `compress`,
 `script` (run Rhai over a range). Editing
@@ -201,7 +221,7 @@ src/
     transform.rs in-place byte transforms (xor/rotate/swap/...)
     strings.rs  ASCII + UTF-16 string extraction
     scan.rs     value scanner (first-scan + refine) + freeze
-    pointer.rs  pointer scanning (find pointers to an address)
+    pointer.rs  pointer scanning + multi-level chains
     signatures.rs binwalk-style format/crypto signature scan
     patch.rs    IPS patch create / parse / apply
     diff.rs     detailed binary diff (all differing ranges)
@@ -212,6 +232,7 @@ src/
     script.rs / script_store.rs  Rhai scripting + user script library
     script.rs   sandboxed Rhai scripting over a byte buffer
     sidecar.rs  persistent annotations (.ghx): bookmarks/regions/notes
+  cli.rs        headless CLI subcommands — ganghex sha256 FILE ...
   mcp.rs        MCP (Model Context Protocol) server — ganghex --mcp
   ui/           egui front-end
     app.rs / app_ui.rs   application state, menus, hex view, dialogs
@@ -222,7 +243,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **226 tests**
+Engine, feature operations and GUI are implemented and covered by **244 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 

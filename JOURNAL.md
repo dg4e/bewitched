@@ -643,7 +643,36 @@ driving the tools, a model does.
   real piped stdio sessions as smoke tests. This mirrors the whole codebase's
   bias: put the logic in pure, testable functions and keep the I/O shell thin.
 
-## 12. Known limitations and future work
+## 12. Headless CLI, more patch/CRC/pointer tools
+
+A third interface joined the GUI and MCP server: a **headless CLI** (`src/cli.rs`).
+`cli::dispatch` is checked first in `ui::run`; if argv's first token is a known
+subcommand it runs and `process::exit`s, otherwise it returns `NotCli` and the
+GUI/MCP paths proceed. Commands (`sha256`, `dump`, `strings`, `search`, `disasm`,
+`sigs`, `pointers`, `crc`, `bps`, …) are thin wrappers over the same `ops`
+engine, printing to stdout for pipelines. The three front-ends — GUI, MCP, CLI —
+now all sit on the identical operations, which is exactly the payoff of keeping
+logic in `ops` and the I/O shells thin.
+
+Alongside it, several engine features that round out the RE/ROM-hacking story:
+
+- **BPS patches** (`patch.rs`) join IPS: any file size, with embedded
+  source/target/patch CRC-32s. We emit literal-`TargetRead` patches but apply all
+  four BPS actions, so patches from Flips/beat apply correctly. The signed
+  variable-length integer codec is unit-tested in isolation.
+- **Custom CRC** (`checksum::custom_crc` + `CrcParams`) implements the Rocksoft
+  model (width/poly/init/refin/refout/xorout), so *any* CRC — including
+  proprietary ones — is computable; verified against the canonical `123456789`
+  check values for CRC-32, CRC-16/CCITT, CRC-8 and CRC-16/ARC.
+- **Multi-level pointer chains** (`pointer::find_chains`) extend single-level
+  pointer scanning with a bounded breadth-first reverse walk, and `resolve_chain`
+  walks one forward to confirm it still reaches the target — the basis of the
+  pointer-map workflow. There's now a GUI Pointer-scan dialog too.
+
+Each is exposed through whichever front-ends make sense (GUI menu, MCP tool, CLI
+subcommand), never reimplemented per surface.
+
+## 13. Known limitations and future work
 
 - **Folded cursor.** Navigation stays in offset space, so the cursor can sit
   inside a collapsed region (invisible until unfolded). A future version could
