@@ -24,6 +24,7 @@ impl eframe::App for App {
         self.transform_window(ctx);
         self.strings_window(ctx);
         self.scan_window(ctx);
+        self.ptrscan_window(ctx);
         self.signatures_window(ctx);
         self.byteplot_window(ctx);
         self.diff_window(ctx);
@@ -300,6 +301,10 @@ impl App {
                 }
                 if ui.button("Value scanner (memory/save editing)…").clicked() {
                     self.scan.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Pointer scan…").clicked() {
+                    self.ptrscan.open = true;
                     ui.close_menu();
                 }
                 if ui.button("Find signatures (binwalk)…").clicked() {
@@ -1615,6 +1620,71 @@ impl App {
             self.set_cursor(off, false);
         }
         self.scan.open = open;
+    }
+
+    fn ptrscan_window(&mut self, ctx: &egui::Context) {
+        let mut open = self.ptrscan.open;
+        let mut jump: Option<u64> = None;
+        egui::Window::new("Pointer scan")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Find 64-bit pointers into [target-maxoff, target]. Base = address of \
+                         byte 0 of this image (0 for a file).",
+                    )
+                    .small()
+                    .color(theme::GREEN_DIM),
+                );
+                egui::Grid::new("ptrscan_in").num_columns(2).show(ui, |ui| {
+                    ui.label("Target addr");
+                    ui.add(egui::TextEdit::singleline(&mut self.ptrscan.target).hint_text("0x…"));
+                    ui.end_row();
+                    ui.label("Image base");
+                    ui.add(egui::TextEdit::singleline(&mut self.ptrscan.base).hint_text("0"));
+                    ui.end_row();
+                    ui.label("Max offset");
+                    ui.add(egui::TextEdit::singleline(&mut self.ptrscan.max_offset));
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Scan").clicked() {
+                        self.do_ptrscan();
+                    }
+                    if !self.ptrscan.status.is_empty() {
+                        ui.label(egui::RichText::new(&self.ptrscan.status).color(theme::AMBER));
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                    egui::Grid::new("ptrscan_out").num_columns(2).striped(true).show(ui, |ui| {
+                        ui.label(egui::RichText::new("pointer addr").color(theme::ADDR));
+                        ui.label(egui::RichText::new("offset").color(theme::ADDR));
+                        ui.end_row();
+                        for (addr, off) in self.ptrscan.results.iter().take(2000) {
+                            if ui
+                                .add(egui::Label::new(
+                                    egui::RichText::new(format!("{:#018X}", addr)).color(theme::GREEN),
+                                ).sense(egui::Sense::click()))
+                                .clicked()
+                            {
+                                jump = Some(*addr);
+                            }
+                            ui.label(egui::RichText::new(format!("+{:#X}", off)).monospace());
+                            ui.end_row();
+                        }
+                    });
+                });
+            });
+        if let Some(addr) = jump {
+            // jump to the pointer's document offset (addr - base)
+            let base = self.ptrscan.base.trim().trim_start_matches("0x");
+            let base = u64::from_str_radix(base, 16).ok().or_else(|| self.ptrscan.base.trim().parse().ok()).unwrap_or(0);
+            self.set_cursor(addr.saturating_sub(base).min(self.doc.len()), false);
+        }
+        self.ptrscan.open = open;
     }
 
     fn signatures_window(&mut self, ctx: &egui::Context) {

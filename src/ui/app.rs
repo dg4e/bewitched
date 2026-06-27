@@ -8,8 +8,8 @@ use egui::{Key, Sense};
 
 use crate::data::{Document, MemRegion, ProcessHandle, ProcessSource, Region, RowItem, ViewMap};
 use crate::ops::{
-    byteplot, checksum, compress, diff, disasm, export, fileops, inspect, patch, pattern, scan,
-    script, search, sidecar, signatures, stats, strings, template, transform, Progress,
+    byteplot, checksum, compress, diff, disasm, export, fileops, inspect, patch, pattern, pointer,
+    scan, script, search, sidecar, signatures, stats, strings, template, transform, Progress,
 };
 
 use super::charset::Charset;
@@ -290,6 +290,16 @@ struct ScanState {
     status: String,
 }
 
+#[derive(Default)]
+struct PtrScanState {
+    open: bool,
+    target: String,
+    base: String,
+    max_offset: String,
+    results: Vec<(u64, u64)>,
+    status: String,
+}
+
 impl Default for ScanState {
     fn default() -> Self {
         Self {
@@ -356,6 +366,7 @@ pub struct App {
     transform: TransformState,
     strings: StringsState,
     scan: ScanState,
+    ptrscan: PtrScanState,
     signatures: SignaturesState,
     byteplot: ByteplotState,
     diff: DiffState,
@@ -427,6 +438,10 @@ impl App {
                 ..Default::default()
             },
             scan: ScanState::default(),
+            ptrscan: PtrScanState {
+                max_offset: "1024".into(),
+                ..Default::default()
+            },
             signatures: SignaturesState::default(),
             byteplot: ByteplotState::default(),
             diff: DiffState::default(),
@@ -895,6 +910,28 @@ impl App {
             }
         }
         self.scan.status = format!("froze {} value(s)", self.frozen.len());
+    }
+
+    fn do_ptrscan(&mut self) {
+        let pa = |s: &str| {
+            let s = s.trim();
+            if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+                u64::from_str_radix(h, 16).ok()
+            } else {
+                s.parse().ok()
+            }
+        };
+        let Some(target) = pa(&self.ptrscan.target) else {
+            self.ptrscan.status = "enter a target address".into();
+            return;
+        };
+        let base = pa(&self.ptrscan.base).unwrap_or(0);
+        let max_off = pa(&self.ptrscan.max_offset).unwrap_or(0x400);
+        let reader = self.doc.reader();
+        self.ptrscan.results = pointer::find_pointers_to(
+            &reader, base, target, max_off, 8, 100_000, &Progress::default(),
+        );
+        self.ptrscan.status = format!("{} pointer(s)", self.ptrscan.results.len());
     }
 
     fn unfreeze_all(&mut self) {
