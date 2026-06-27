@@ -39,6 +39,7 @@ Headless commands (read FILE, print to stdout):
   ganghex pointers FILE TARGET [MAXOFF]    find 64-bit pointers to TARGET
   ganghex export FILE FORMAT [OFF] [LEN]   export (e.g. 'C source', base64)
   ganghex gunzip FILE                      decompress (auto-detect) to stdout
+  ganghex crc    FILE W POLY INIT R X      custom CRC (W bits, R='rr'/'--')
   ganghex bps    ORIG MOD OUT              create a BPS patch ORIG→MOD
   ganghex --help | --version
 ";
@@ -68,7 +69,7 @@ fn is_command(s: &str) -> bool {
         s,
         "dump" | "sha256" | "md5" | "sha1" | "sha512" | "crc32" | "sum" | "strings" | "search"
             | "find" | "stats" | "scan" | "sigs" | "disasm" | "pointers" | "export" | "gunzip"
-            | "bps" | "help" | "--help" | "-h"
+            | "bps" | "crc" | "help" | "--help" | "-h"
     )
 }
 
@@ -201,6 +202,25 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
             let codec = compress::detect(&data).ok_or("could not detect gzip/zlib header")?;
             let out = compress::decompress(&data, codec)?;
             std::io::stdout().write_all(&out).map_err(|e| e.to_string())?;
+        }
+        "crc" => {
+            // crc FILE WIDTH POLY INIT REFL XOROUT  (REFL = 'rr','--','r-','-r')
+            let width = parse_u64(args.get(1)).ok_or("missing WIDTH")? as u32;
+            let poly = parse_u64(args.get(2)).ok_or("missing POLY")?;
+            let init = parse_u64(args.get(3)).unwrap_or(0);
+            let refl = args.get(4).map(|s| s.as_str()).unwrap_or("--");
+            let xorout = parse_u64(args.get(5)).unwrap_or(0);
+            let params = checksum::CrcParams {
+                width,
+                poly,
+                init,
+                refin: refl.starts_with('r'),
+                refout: refl.chars().nth(1) == Some('r'),
+                xorout,
+            };
+            let data = doc.read_range(0, total as usize);
+            let v = checksum::custom_crc(&data, &params);
+            println!("{:0w$X}", v, w = (width as usize).div_ceil(4));
         }
         _ => return Err(format!("unknown command '{cmd}' (try --help)")),
     }

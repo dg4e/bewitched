@@ -971,6 +971,43 @@ impl App {
                 if let Some(hex) = write {
                     self.write_hex_at_cursor(&hex);
                 }
+                ui.separator();
+                ui.collapsing("Custom CRC", |ui| {
+                    ui.label(
+                        egui::RichText::new("Rocksoft model — poly/init/xorout in hex")
+                            .small()
+                            .color(theme::GREEN_DIM),
+                    );
+                    egui::Grid::new("ccrc").num_columns(2).show(ui, |ui| {
+                        ui.label("Width (bits)");
+                        ui.add(egui::TextEdit::singleline(&mut self.checksum.crc_width).desired_width(80.0));
+                        ui.end_row();
+                        ui.label("Poly");
+                        ui.add(egui::TextEdit::singleline(&mut self.checksum.crc_poly).desired_width(160.0));
+                        ui.end_row();
+                        ui.label("Init");
+                        ui.add(egui::TextEdit::singleline(&mut self.checksum.crc_init).desired_width(160.0));
+                        ui.end_row();
+                        ui.label("XorOut");
+                        ui.add(egui::TextEdit::singleline(&mut self.checksum.crc_xorout).desired_width(160.0));
+                        ui.end_row();
+                    });
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.checksum.crc_refin, "RefIn");
+                        ui.checkbox(&mut self.checksum.crc_refout, "RefOut");
+                    });
+                    if ui.button("Compute CRC").clicked() {
+                        self.compute_custom_crc();
+                    }
+                    if !self.checksum.crc_result.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&self.checksum.crc_result).color(theme::GREEN).monospace());
+                            if ui.small_button("copy").clicked() {
+                                ui.ctx().copy_text(self.checksum.crc_result.clone());
+                            }
+                        });
+                    }
+                });
             });
         self.checksum.open = open;
     }

@@ -615,6 +615,11 @@ fn tools_list() -> Value {
             "offset": {"type":"integer"}, "length": {"type":"integer"} })) },
         { "name": "statistics", "description": "Entropy, byte distribution summary and a data-type classification.",
           "inputSchema": path_schema(json!({ "offset": {"type":"integer"}, "length": {"type":"integer"} })) },
+        { "name": "custom_crc", "description": "Compute any CRC via the Rocksoft model (width/poly/init/refin/refout/xorout).",
+          "inputSchema": path_schema(json!({
+            "width": {"type":"integer","description":"bits, default 32"}, "poly": {"type":"integer"},
+            "init": {"type":"integer"}, "refin": {"type":"boolean"}, "refout": {"type":"boolean"},
+            "xorout": {"type":"integer"}, "offset": {"type":"integer"}, "length": {"type":"integer"} })) },
         { "name": "histogram", "description": "Full 256-bin byte distribution plus entropy and most-common byte.",
           "inputSchema": path_schema(json!({ "offset": {"type":"integer"}, "length": {"type":"integer"} })) },
         { "name": "entropy_map", "description": "Per-bucket entropy across the range (locate compressed/encrypted regions).",
@@ -755,6 +760,20 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
                 "most_common": mc
             })
             .to_string())
+        }
+        "custom_crc" => {
+            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
+            let params = checksum::CrcParams {
+                width: args.get("width").and_then(|v| v.as_u64()).unwrap_or(32) as u32,
+                poly: args.get("poly").and_then(|v| v.as_u64()).ok_or("missing 'poly'")?,
+                init: args.get("init").and_then(|v| v.as_u64()).unwrap_or(0),
+                refin: args.get("refin").and_then(|v| v.as_bool()).unwrap_or(false),
+                refout: args.get("refout").and_then(|v| v.as_bool()).unwrap_or(false),
+                xorout: args.get("xorout").and_then(|v| v.as_u64()).unwrap_or(0),
+            };
+            let data = doc.read_range(off, len as usize);
+            let v = checksum::custom_crc(&data, &params);
+            Ok(json!({ "value": v, "hex": format!("{:X}", v) }).to_string())
         }
         "histogram" => {
             let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
@@ -1184,6 +1203,17 @@ mod tests {
         assert_eq!(d["codec"], "zlib");
         assert_eq!(std::fs::read(&out).unwrap(), original);
         for f in [p, zp, out] { let _ = std::fs::remove_file(&f); }
+    }
+
+    #[test]
+    fn custom_crc_tool() {
+        let p = tmpfile(b"123456789");
+        let resp = call(&mut Server::new(), "custom_crc", json!({
+            "path": p.to_str().unwrap(), "width": 32, "poly": 0x04C11DB7,
+            "init": 0xFFFFFFFFu64, "refin": true, "refout": true, "xorout": 0xFFFFFFFFu64
+        }));
+        assert_eq!(resp["hex"], "CBF43926");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

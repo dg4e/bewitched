@@ -74,6 +74,14 @@ struct ChecksumState {
     selected: Vec<bool>,
     results: Vec<(checksum::Algo, String)>,
     whole_file: bool,
+    // custom CRC parameters (hex strings) + last result
+    crc_width: String,
+    crc_poly: String,
+    crc_init: String,
+    crc_xorout: String,
+    crc_refin: bool,
+    crc_refout: bool,
+    crc_result: String,
 }
 
 impl Default for ChecksumState {
@@ -94,6 +102,13 @@ impl Default for ChecksumState {
             selected,
             results: Vec::new(),
             whole_file: true,
+            crc_width: "32".into(),
+            crc_poly: "04C11DB7".into(),
+            crc_init: "FFFFFFFF".into(),
+            crc_xorout: "FFFFFFFF".into(),
+            crc_refin: true,
+            crc_refout: true,
+            crc_result: String::new(),
         }
     }
 }
@@ -1009,6 +1024,23 @@ impl App {
     fn do_entropy_map(&mut self) {
         let (off, len) = self.scope(self.stats.whole_file);
         self.stats.emap = stats::entropy_map(&self.doc, off, len, 256, &Progress::default());
+    }
+
+    fn compute_custom_crc(&mut self) {
+        let pu = |s: &str| u64::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok();
+        let width = self.checksum.crc_width.trim().parse::<u32>().unwrap_or(32);
+        let params = checksum::CrcParams {
+            width,
+            poly: pu(&self.checksum.crc_poly).unwrap_or(0),
+            init: pu(&self.checksum.crc_init).unwrap_or(0),
+            refin: self.checksum.crc_refin,
+            refout: self.checksum.crc_refout,
+            xorout: pu(&self.checksum.crc_xorout).unwrap_or(0),
+        };
+        let (off, len) = self.scope(self.checksum.whole_file);
+        let data = self.doc.read_range(off, len as usize);
+        let v = checksum::custom_crc(&data, &params);
+        self.checksum.crc_result = format!("{:0w$X}", v, w = (width as usize).div_ceil(4));
     }
 
     /// Write a hex-string digest at the cursor (checksum repair).

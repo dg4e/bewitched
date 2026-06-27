@@ -176,11 +176,83 @@ pub fn compute(
         .collect()
 }
 
+/// Parameters of a CRC per the Rocksoft^tm model — lets you compute any CRC
+/// (including nonstandard / proprietary ones) by supplying the constants.
+#[derive(Clone, Copy, Debug)]
+pub struct CrcParams {
+    pub width: u32,    // 1..=64
+    pub poly: u64,     // generator polynomial (normal form)
+    pub init: u64,     // initial register value
+    pub refin: bool,   // reflect input bytes
+    pub refout: bool,  // reflect the output
+    pub xorout: u64,   // final XOR value
+}
+
+fn reflect(mut v: u64, bits: u32) -> u64 {
+    let mut r = 0u64;
+    for _ in 0..bits {
+        r = (r << 1) | (v & 1);
+        v >>= 1;
+    }
+    r
+}
+
+/// Compute a custom CRC over `data`. Bit-at-a-time (clear and correct; the inputs
+/// here are interactive selections, not gigabytes). Requires `width >= 8`.
+pub fn custom_crc(data: &[u8], p: &CrcParams) -> u64 {
+    let width = p.width.clamp(8, 64);
+    let topbit = 1u64 << (width - 1);
+    let mask = if width == 64 { u64::MAX } else { (1u64 << width) - 1 };
+    let mut crc = p.init & mask;
+    for &byte in data {
+        let b = if p.refin { reflect(byte as u64, 8) } else { byte as u64 };
+        // bring the byte into the top 8 bits of the register
+        crc ^= (b << (width - 8)) & mask;
+        for _ in 0..8 {
+            crc = if crc & topbit != 0 {
+                ((crc << 1) ^ p.poly) & mask
+            } else {
+                (crc << 1) & mask
+            };
+        }
+    }
+    if p.refout {
+        crc = reflect(crc, width);
+    }
+    (crc ^ p.xorout) & mask
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::data::{Document, MemSource};
     use std::sync::Arc;
+
+    #[test]
+    fn custom_crc_known_vectors() {
+        // The standard "123456789" check values for several CRCs.
+        let check = b"123456789";
+        // CRC-32 (ISO-HDLC): poly 0x04C11DB7, init/xorout 0xFFFFFFFF, reflected
+        let crc32 = custom_crc(check, &CrcParams {
+            width: 32, poly: 0x04C11DB7, init: 0xFFFFFFFF, refin: true, refout: true, xorout: 0xFFFFFFFF,
+        });
+        assert_eq!(crc32, 0xCBF43926);
+        // CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection
+        let crc16 = custom_crc(check, &CrcParams {
+            width: 16, poly: 0x1021, init: 0xFFFF, refin: false, refout: false, xorout: 0,
+        });
+        assert_eq!(crc16, 0x29B1);
+        // CRC-8 (SMBus): poly 0x07, init 0, no reflection
+        let crc8 = custom_crc(check, &CrcParams {
+            width: 8, poly: 0x07, init: 0, refin: false, refout: false, xorout: 0,
+        });
+        assert_eq!(crc8, 0xF4);
+        // CRC-16/ARC: poly 0x8005, reflected — matches our built-in CRC-16
+        let arc = custom_crc(check, &CrcParams {
+            width: 16, poly: 0x8005, init: 0, refin: true, refout: true, xorout: 0,
+        });
+        assert_eq!(arc, 0xBB3D);
+    }
 
     #[test]
     fn known_vectors() {
