@@ -9,6 +9,15 @@ const MOD: &str = "^";
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 const MOD: &str = "Ctrl+";
 
+/// Redo shortcut label. macOS convention is ⇧⌘Z; elsewhere it's the Ctrl+Y
+/// idiom. Both bindings are accepted at runtime regardless of platform.
+#[cfg(target_os = "macos")]
+const REDO_HINT: &str = "⇧⌘Z";
+#[cfg(target_os = "windows")]
+const REDO_HINT: &str = "^Y";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const REDO_HINT: &str = "Ctrl+Y";
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_bg(ctx);
@@ -138,7 +147,7 @@ impl App {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("quit").on_hover_text("close bewitched").clicked() {
+                if ui.button(format!("quit   {MOD}Q")).on_hover_text("close bewitched").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
@@ -149,7 +158,7 @@ impl App {
                     self.scroll_to_cursor = true;
                     ui.close_menu();
                 }
-                if ui.add_enabled(self.doc.can_redo(), egui::Button::new(format!("redo   {MOD}Y"))).on_hover_text("redo the last undone edit").clicked() {
+                if ui.add_enabled(self.doc.can_redo(), egui::Button::new(format!("redo   {REDO_HINT}"))).on_hover_text("redo the last undone edit").clicked() {
                     self.doc.redo();
                     self.scroll_to_cursor = true;
                     ui.close_menu();
@@ -436,7 +445,7 @@ impl App {
                         egui::RichText::new(format!("{} cursors", self.extra_cursors.len() + 1))
                             .color(theme::AMBER),
                     )
-                    .on_hover_text("Ctrl/Cmd+click to add carets · Esc to clear");
+                    .on_hover_text(format!("{MOD}click to add carets · Esc to clear"));
                     ui.separator();
                 }
                 ui.add(
@@ -747,14 +756,20 @@ impl App {
             match key {
                 Key::O => self.open_dialog(),
                 Key::S => self.save(),
+                // ⌘Z / Ctrl+Z undo; ⇧⌘Z redo (macOS idiom, accepted everywhere).
                 Key::Z => {
-                    self.doc.undo();
+                    if shift {
+                        self.doc.redo();
+                    } else {
+                        self.doc.undo();
+                    }
                     self.scroll_to_cursor = true;
                 }
                 Key::Y => {
                     self.doc.redo();
                     self.scroll_to_cursor = true;
                 }
+                Key::Q => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 Key::C => self.copy(ctx),
                 Key::X => self.cut(ctx),
                 Key::V => self.paste(self.mode == EditMode::Overwrite),
