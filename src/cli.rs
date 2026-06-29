@@ -158,7 +158,7 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
             }
         }
         "scan" => {
-            let ty = parse_scan_type(args.get(1).map(|s| s.as_str()).unwrap_or(""))?;
+            let ty = search::DataType::from_name(args.get(1).map(|s| s.as_str()).unwrap_or(""))?;
             let value = args.get(2).ok_or("missing VALUE")?;
             let needle = search::needle_bytes(value, ty, search::Endian::Little, false)?;
             let m = scan::first_scan(&doc, &needle, needle.len() as u64, 1_000_000, &Progress::default());
@@ -174,7 +174,7 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
             }
         }
         "disasm" => {
-            let arch = parse_arch(args.get(1).map(|s| s.as_str()).unwrap_or("x86-64"))?;
+            let arch = disasm::Arch::from_name(args.get(1).map(|s| s.as_str()).unwrap_or("x86-64"))?;
             let off = parse_u64(args.get(2)).unwrap_or(0);
             let count = parse_u64(args.get(3)).unwrap_or(32) as usize;
             for i in disasm::disassemble(&doc, off, count, arch) {
@@ -192,7 +192,7 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
             eprintln!("{} pointer(s)", hits.len());
         }
         "export" => {
-            let fmt = parse_format(args.get(1).map(|s| s.as_str()).unwrap_or(""))?;
+            let fmt = export::Format::from_name(args.get(1).map(|s| s.as_str()).unwrap_or(""))?;
             let off = parse_u64(args.get(2)).unwrap_or(0);
             let len = parse_u64(args.get(3)).unwrap_or(total.saturating_sub(off));
             print!("{}", export::export(&doc, off, len, fmt));
@@ -260,51 +260,6 @@ fn digest_algo(name: &str) -> Option<checksum::Algo> {
     })
 }
 
-fn parse_scan_type(s: &str) -> Result<search::DataType, String> {
-    use search::DataType::*;
-    Ok(match s.to_lowercase().as_str() {
-        "text" => Text,
-        "hex" => Hex,
-        "i8" => I8,
-        "i16" => I16,
-        "i32" => I32,
-        "i64" => I64,
-        "f32" => F32,
-        "f64" => F64,
-        other => return Err(format!("unknown scan type '{other}'")),
-    })
-}
-
-fn parse_arch(s: &str) -> Result<disasm::Arch, String> {
-    use disasm::Arch::*;
-    Ok(match s.to_lowercase().replace(['_', ' '], "-").as_str() {
-        "x86-16" => X86_16,
-        "x86-32" | "x86" => X86_32,
-        "x86-64" | "x64" => X86_64,
-        "arm" => Arm,
-        "thumb" => ArmThumb,
-        "aarch64" | "arm64" => Aarch64,
-        "mips" | "mips-le" => MipsLe,
-        "mips-be" => MipsBe,
-        "powerpc" | "ppc" => PowerPc,
-        "riscv32" => RiscV32,
-        "riscv64" | "riscv" => RiscV64,
-        "msp430" => Msp430,
-        "6502" => M6502,
-        "sm83" => Sm83,
-        other => return Err(format!("unknown arch '{other}'")),
-    })
-}
-
-fn parse_format(s: &str) -> Result<export::Format, String> {
-    let n = s.to_lowercase();
-    export::Format::ALL
-        .iter()
-        .find(|f| f.name().to_lowercase() == n || f.extension() == n)
-        .or_else(|| export::Format::ALL.iter().find(|f| f.name().to_lowercase().contains(&n)))
-        .copied()
-        .ok_or_else(|| format!("unknown export format '{s}'"))
-}
 
 #[cfg(test)]
 mod tests {
@@ -371,8 +326,8 @@ mod tests {
     fn parse_helpers() {
         assert_eq!(parse_u64(Some(&"0x10".to_string())), Some(16));
         assert_eq!(parse_u64(Some(&"255".to_string())), Some(255));
-        assert!(parse_arch("aarch64").is_ok());
-        assert!(parse_scan_type("i32").is_ok());
+        assert!(disasm::Arch::from_name("aarch64").is_ok());
+        assert!(search::DataType::from_name("i32").is_ok());
         assert!(digest_algo("sha512").is_some());
     }
 }

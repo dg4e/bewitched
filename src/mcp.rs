@@ -139,7 +139,7 @@ impl Server {
     fn dispatch_tool(&mut self, name: &str, args: &Value) -> Result<String, String> {
         match name {
             "open" => {
-                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let path = str_arg(args, "path")?;
                 let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
                 let len = doc.len();
                 let id = self.next_id;
@@ -154,11 +154,11 @@ impl Server {
             }
             _ if name.starts_with("session_") => {
                 let id = session_id(args)?;
-                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let off = u64_arg(args, "offset", 0);
                 let doc = self.sessions.get_mut(&id).ok_or("no such session")?;
                 match name {
                     "session_read" => {
-                        let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(256);
+                        let len = u64_arg(args, "length", 256);
                         Ok(export::export(doc, off, len, export::Format::PlainHexDump))
                     }
                     "session_write" => {
@@ -172,7 +172,7 @@ impl Server {
                         Ok(json!({ "inserted": bytes.len(), "length": doc.len() }).to_string())
                     }
                     "session_delete" => {
-                        let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let len = u64_arg(args, "length", 0);
                         doc.delete(off, len);
                         Ok(json!({ "deleted": len, "length": doc.len() }).to_string())
                     }
@@ -212,8 +212,8 @@ impl Server {
                 }
             }
             "write_bytes" => {
-                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
-                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let path = str_arg(args, "path")?;
+                let off = u64_arg(args, "offset", 0);
                 let bytes = parse_hex_arg(args)?;
                 let mut doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
                 doc.overwrite(off, &bytes);
@@ -221,8 +221,8 @@ impl Server {
                 Ok(json!({ "written": bytes.len() }).to_string())
             }
             "transform" => {
-                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
-                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let path = str_arg(args, "path")?;
+                let off = u64_arg(args, "offset", 0);
                 let mut doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
                 let len = args
                     .get("length")
@@ -236,9 +236,9 @@ impl Server {
                 Ok(json!({ "transformed": data.len() }).to_string())
             }
             "patch_create" => {
-                let orig = args.get("original").and_then(|p| p.as_str()).ok_or("missing 'original'")?;
-                let modi = args.get("modified").and_then(|p| p.as_str()).ok_or("missing 'modified'")?;
-                let outp = args.get("output").and_then(|p| p.as_str()).ok_or("missing 'output'")?;
+                let orig = str_arg(args, "original")?;
+                let modi = str_arg(args, "modified")?;
+                let outp = str_arg(args, "output")?;
                 let a = std::fs::read(orig).map_err(|e| format!("read original: {e}"))?;
                 let b = std::fs::read(modi).map_err(|e| format!("read modified: {e}"))?;
                 let p = patch::make_ips(&a, &b)?;
@@ -246,8 +246,8 @@ impl Server {
                 Ok(json!({ "patch_bytes": p.len() }).to_string())
             }
             "patch_apply" => {
-                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
-                let patch_path = args.get("patch").and_then(|p| p.as_str()).ok_or("missing 'patch'")?;
+                let path = str_arg(args, "path")?;
+                let patch_path = str_arg(args, "patch")?;
                 let bytes = std::fs::read(patch_path).map_err(|e| format!("read patch: {e}"))?;
                 let writes = patch::parse_ips(&bytes)?;
                 let mut doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
@@ -258,11 +258,11 @@ impl Server {
                 Ok(json!({ "records": writes.len() }).to_string())
             }
             "compare" => {
-                let pa = args.get("path_a").and_then(|p| p.as_str()).ok_or("missing 'path_a'")?;
-                let pb = args.get("path_b").and_then(|p| p.as_str()).ok_or("missing 'path_b'")?;
+                let pa = str_arg(args, "path_a")?;
+                let pb = str_arg(args, "path_b")?;
                 let a = Document::open_file(pa).map_err(|e| format!("open a: {e}"))?;
                 let b = Document::open_file(pb).map_err(|e| format!("open b: {e}"))?;
-                let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(1000) as usize;
+                let max = u64_arg(args, "max", 1000) as usize;
                 let r = diff::diff(&a, &b, max, &Progress::default());
                 let ranges: Vec<Value> = r
                     .ranges
@@ -277,9 +277,9 @@ impl Server {
                 .to_string())
             }
             "bps_create" => {
-                let orig = args.get("original").and_then(|p| p.as_str()).ok_or("missing 'original'")?;
-                let modi = args.get("modified").and_then(|p| p.as_str()).ok_or("missing 'modified'")?;
-                let outp = args.get("output").and_then(|p| p.as_str()).ok_or("missing 'output'")?;
+                let orig = str_arg(args, "original")?;
+                let modi = str_arg(args, "modified")?;
+                let outp = str_arg(args, "output")?;
                 let a = std::fs::read(orig).map_err(|e| format!("read original: {e}"))?;
                 let b = std::fs::read(modi).map_err(|e| format!("read modified: {e}"))?;
                 let p = patch::make_bps(&a, &b);
@@ -287,8 +287,8 @@ impl Server {
                 Ok(json!({ "patch_bytes": p.len() }).to_string())
             }
             "bps_apply" => {
-                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
-                let patch_path = args.get("patch").and_then(|p| p.as_str()).ok_or("missing 'patch'")?;
+                let path = str_arg(args, "path")?;
+                let patch_path = str_arg(args, "patch")?;
                 let bytes = std::fs::read(patch_path).map_err(|e| format!("read patch: {e}"))?;
                 let source = std::fs::read(path).map_err(|e| format!("read source: {e}"))?;
                 let target = patch::apply_bps(&bytes, &source)?;
@@ -296,9 +296,9 @@ impl Server {
                 Ok(json!({ "bytes": target.len() }).to_string())
             }
             "decompress" => {
-                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let path = str_arg(args, "path")?;
                 let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
-                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let off = u64_arg(args, "offset", 0);
                 let len = args
                     .get("length")
                     .and_then(|v| v.as_u64())
@@ -320,28 +320,28 @@ impl Server {
                 }
             }
             "compress" => {
-                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
-                let outp = args.get("output").and_then(|p| p.as_str()).ok_or("missing 'output'")?;
+                let path = str_arg(args, "path")?;
+                let outp = str_arg(args, "output")?;
                 let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
-                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let off = u64_arg(args, "offset", 0);
                 let len = args
                     .get("length")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(doc.len().saturating_sub(off));
                 let codec = crate::ops::compress::Codec::parse(
-                    args.get("codec").and_then(|v| v.as_str()).unwrap_or("zlib"),
+                    str_or(args, "codec", "zlib"),
                 )
                 .ok_or("unknown codec")?;
-                let level = args.get("level").and_then(|v| v.as_u64()).unwrap_or(6) as u32;
+                let level = u64_arg(args, "level", 6) as u32;
                 let data = doc.read_range(off, len as usize);
                 let out = crate::ops::compress::compress(&data, codec, level);
                 std::fs::write(outp, &out).map_err(|e| format!("write: {e}"))?;
                 Ok(json!({ "codec": codec.name(), "bytes": out.len(), "output": outp }).to_string())
             }
             "carve" => {
-                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
-                let outp = args.get("output").and_then(|p| p.as_str()).ok_or("missing 'output'")?;
-                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let path = str_arg(args, "path")?;
+                let outp = str_arg(args, "output")?;
+                let off = u64_arg(args, "offset", 0);
                 let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
                 let len = args
                     .get("length")
@@ -352,10 +352,10 @@ impl Server {
                 Ok(json!({ "carved": data.len(), "output": outp }).to_string())
             }
             "script" => {
-                let path = args.get("path").and_then(|p| p.as_str()).ok_or("missing 'path'")?;
+                let path = str_arg(args, "path")?;
                 let src = resolve_script(args)?;
                 let mut doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
-                let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let off = u64_arg(args, "offset", 0);
                 let len = args
                     .get("length")
                     .and_then(|v| v.as_u64())
@@ -382,6 +382,23 @@ impl Server {
             _ => call_tool(name, args),
         }
     }
+}
+
+/// Required string argument; errors with `missing '<key>'` if absent or non-string.
+fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("missing '{key}'"))
+}
+
+/// Optional string argument with a fallback default.
+fn str_or<'a>(args: &'a Value, key: &str, default: &'a str) -> &'a str {
+    args.get(key).and_then(|v| v.as_str()).unwrap_or(default)
+}
+
+/// Optional unsigned-integer argument with a fallback default.
+fn u64_arg(args: &Value, key: &str, default: u64) -> u64 {
+    args.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
 }
 
 fn session_id(args: &Value) -> Result<u64, String> {
@@ -427,14 +444,14 @@ fn script_result_json(r: &script::ScriptResult, saved: bool) -> Value {
 }
 
 fn parse_hex_arg(args: &Value) -> Result<Vec<u8>, String> {
-    let hex = args.get("hex").and_then(|v| v.as_str()).ok_or("missing 'hex'")?;
+    let hex = str_arg(args, "hex")?;
     crate::ops::pattern::parse_hex_pattern(hex)
 }
 
 fn parse_transform(args: &Value) -> Result<transform::Op, String> {
-    let op = args.get("op").and_then(|v| v.as_str()).unwrap_or("");
-    let key = args.get("key").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-    let n = args.get("key").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+    let op = str_or(args, "op", "");
+    let key = u64_arg(args, "key", 0) as u8;
+    let n = u64_arg(args, "key", 1) as u32;
     Ok(match op.to_lowercase().as_str() {
         "not" => transform::Op::Not,
         "xor" => transform::Op::Xor(key),
@@ -447,7 +464,7 @@ fn parse_transform(args: &Value) -> Result<transform::Op, String> {
         "shl" => transform::Op::Shl(n),
         "shr" => transform::Op::Shr(n),
         "reverse" => transform::Op::Reverse,
-        "swap" => transform::Op::SwapBytes(args.get("key").and_then(|v| v.as_u64()).unwrap_or(2) as usize),
+        "swap" => transform::Op::SwapBytes(u64_arg(args, "key", 2) as usize),
         "flipcase" | "flip_case" => transform::Op::FlipCase,
         other => return Err(format!("unknown transform op: {other}")),
     })
@@ -560,7 +577,7 @@ fn prompts_list() -> Value {
 }
 
 fn get_prompt(name: &str, args: &Value) -> Result<Value, String> {
-    let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("<path>");
+    let path = str_or(args, "path", "<path>");
     let text = match name {
         "identify-file" => format!(
             "Identify the file at `{path}`. Call the `signatures` tool to detect magic numbers, \
@@ -742,16 +759,16 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
         .and_then(|p| p.as_str())
         .ok_or("missing 'path'")?;
     let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
-    let off = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+    let off = u64_arg(args, "offset", 0);
     let total = doc.len();
 
     match name {
         "read_hex" => {
-            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(256);
+            let len = u64_arg(args, "length", 256);
             Ok(export::export(&doc, off, len, export::Format::PlainHexDump))
         }
         "checksums" => {
-            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
+            let len = u64_arg(args, "length", total - off.min(total));
             let algos = parse_algos(args.get("algorithms"));
             let results = checksum::compute(&doc, off, len, &algos, &Progress::default());
             let map: serde_json::Map<String, Value> = results
@@ -761,7 +778,7 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             Ok(Value::Object(map).to_string())
         }
         "statistics" => {
-            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
+            let len = u64_arg(args, "length", total - off.min(total));
             let s = stats::analyze(&doc, off, len, &Progress::default());
             let mc = s.most_common().map(|(b, c)| json!({"byte": b, "count": c}));
             Ok(json!({
@@ -773,21 +790,21 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             .to_string())
         }
         "custom_crc" => {
-            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
+            let len = u64_arg(args, "length", total - off.min(total));
             let params = checksum::CrcParams {
-                width: args.get("width").and_then(|v| v.as_u64()).unwrap_or(32) as u32,
+                width: u64_arg(args, "width", 32) as u32,
                 poly: args.get("poly").and_then(|v| v.as_u64()).ok_or("missing 'poly'")?,
-                init: args.get("init").and_then(|v| v.as_u64()).unwrap_or(0),
+                init: u64_arg(args, "init", 0),
                 refin: args.get("refin").and_then(|v| v.as_bool()).unwrap_or(false),
                 refout: args.get("refout").and_then(|v| v.as_bool()).unwrap_or(false),
-                xorout: args.get("xorout").and_then(|v| v.as_u64()).unwrap_or(0),
+                xorout: u64_arg(args, "xorout", 0),
             };
             let data = doc.read_range(off, len as usize);
             let v = checksum::custom_crc(&data, &params);
             Ok(json!({ "value": v, "hex": format!("{:X}", v) }).to_string())
         }
         "histogram" => {
-            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
+            let len = u64_arg(args, "length", total - off.min(total));
             let s = stats::analyze(&doc, off, len, &Progress::default());
             Ok(json!({
                 "total": s.total,
@@ -798,15 +815,15 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             .to_string())
         }
         "entropy_map" => {
-            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
-            let buckets = args.get("buckets").and_then(|v| v.as_u64()).unwrap_or(64) as usize;
+            let len = u64_arg(args, "length", total - off.min(total));
+            let buckets = u64_arg(args, "buckets", 64) as usize;
             let map = stats::entropy_map(&doc, off, len, buckets, &Progress::default());
             Ok(json!({ "buckets": buckets, "entropy": map }).to_string())
         }
         "search" => {
-            let ty = parse_datatype(args.get("type").and_then(|v| v.as_str()).unwrap_or("hex"))?;
-            let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
-            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+            let ty = search::DataType::from_name(str_or(args, "type", "hex"))?;
+            let value = str_or(args, "value", "");
+            let max = u64_arg(args, "max", 100) as usize;
             let needle = search::needle_bytes(value, ty, search::Endian::Little, false)?;
             let mut hits = Vec::new();
             let mut from = 0u64;
@@ -822,18 +839,18 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             Ok(json!({ "matches": hits, "count": hits.len() }).to_string())
         }
         "search_pattern" => {
-            let pattern = args.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
-            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+            let pattern = str_or(args, "pattern", "");
+            let max = u64_arg(args, "max", 100) as usize;
             let (pat, mask) = search::parse_hex_mask(pattern)?;
             let hits = search::find_all_masked(&doc, &pat, &mask, max);
             Ok(json!({ "matches": hits, "count": hits.len() }).to_string())
         }
         "find_pointers" => {
             let target = args.get("target").and_then(|v| v.as_u64()).ok_or("missing 'target'")?;
-            let base = args.get("base").and_then(|v| v.as_u64()).unwrap_or(0);
-            let max_offset = args.get("max_offset").and_then(|v| v.as_u64()).unwrap_or(0x1000);
-            let align = args.get("align").and_then(|v| v.as_u64()).unwrap_or(8);
-            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(1000) as usize;
+            let base = u64_arg(args, "base", 0);
+            let max_offset = u64_arg(args, "max_offset", 0x1000);
+            let align = u64_arg(args, "align", 8);
+            let max = u64_arg(args, "max", 1000) as usize;
             let hits = crate::ops::pointer::find_pointers_to(
                 &doc, base, target, max_offset, align, max, &Progress::default(),
             );
@@ -845,12 +862,12 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
         }
         "pointer_chains" => {
             let target = args.get("target").and_then(|v| v.as_u64()).ok_or("missing 'target'")?;
-            let base = args.get("base").and_then(|v| v.as_u64()).unwrap_or(0);
-            let static_base = args.get("static_base").and_then(|v| v.as_u64()).unwrap_or(0);
-            let static_window = args.get("static_window").and_then(|v| v.as_u64()).unwrap_or(0x10000);
-            let max_offset = args.get("max_offset").and_then(|v| v.as_u64()).unwrap_or(0x400);
-            let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
-            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
+            let base = u64_arg(args, "base", 0);
+            let static_base = u64_arg(args, "static_base", 0);
+            let static_window = u64_arg(args, "static_window", 0x10000);
+            let max_offset = u64_arg(args, "max_offset", 0x400);
+            let max_depth = u64_arg(args, "max_depth", 3) as usize;
+            let max = u64_arg(args, "max", 50) as usize;
             let chains = crate::ops::pointer::find_chains(
                 &doc, base, target, static_base, static_window, max_offset, max_depth, max,
                 &Progress::default(),
@@ -862,8 +879,8 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             Ok(json!({ "chains": arr, "count": arr.len() }).to_string())
         }
         "strings" => {
-            let min = args.get("min_length").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
-            let max = args.get("max").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+            let min = u64_arg(args, "min_length", 4) as usize;
+            let max = u64_arg(args, "max", 200) as usize;
             let found = strings::extract(&doc, 0, total, min, max, &Progress::default());
             let arr: Vec<Value> = found
                 .into_iter()
@@ -880,8 +897,8 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             Ok(json!({ "signatures": arr }).to_string())
         }
         "disassemble" => {
-            let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(32) as usize;
-            let arch = parse_arch(args.get("arch").and_then(|v| v.as_str()).unwrap_or("x86-64"))?;
+            let count = u64_arg(args, "count", 32) as usize;
+            let arch = disasm::Arch::from_name(str_or(args, "arch", "x86-64"))?;
             let ins = disasm::disassemble(&doc, off, count, arch);
             let arr: Vec<Value> = ins
                 .into_iter()
@@ -903,8 +920,8 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             Ok(Value::Object(map).to_string())
         }
         "export" => {
-            let len = args.get("length").and_then(|v| v.as_u64()).unwrap_or(total - off.min(total));
-            let fmt = parse_format(args.get("format").and_then(|v| v.as_str()).unwrap_or("Hex dump (plain text)"))?;
+            let len = u64_arg(args, "length", total - off.min(total));
+            let fmt = export::Format::from_name(str_or(args, "format", "Hex dump (plain text)"))?;
             Ok(export::export(&doc, off, len, fmt))
         }
         "parse_struct" => {
@@ -912,7 +929,7 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let src = if let Some(s) = args.get("schema").and_then(|v| v.as_str()) {
                 s.to_string()
             } else {
-                let key = args.get("builtin").and_then(|v| v.as_str()).unwrap_or("PNG").to_lowercase();
+                let key = str_or(args, "builtin", "PNG").to_lowercase();
                 kstruct::BUILTINS
                     .iter()
                     .find(|(n, _)| n.to_lowercase().contains(&key))
@@ -937,7 +954,7 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let src = if let Some(s) = args.get("template").and_then(|v| v.as_str()) {
                 s.to_string()
             } else {
-                let key = args.get("builtin").and_then(|v| v.as_str()).unwrap_or("PNG").to_lowercase();
+                let key = str_or(args, "builtin", "PNG").to_lowercase();
                 template::BUILTINS
                     .iter()
                     .find(|(n, _)| n.to_lowercase().contains(&key))
@@ -985,57 +1002,6 @@ fn parse_algos(v: Option<&Value>) -> Vec<checksum::Algo> {
     }
 }
 
-fn parse_datatype(s: &str) -> Result<search::DataType, String> {
-    use search::DataType::*;
-    Ok(match s.to_lowercase().as_str() {
-        "text" | "ascii" => Text,
-        "utf16" | "unicode" => Utf16,
-        "hex" => Hex,
-        "i8" | "int8" => I8,
-        "i16" | "int16" => I16,
-        "i32" | "int32" => I32,
-        "i64" | "int64" => I64,
-        "f32" | "float" | "float32" => F32,
-        "f64" | "double" | "float64" => F64,
-        other => return Err(format!("unknown data type: {other}")),
-    })
-}
-
-fn parse_arch(s: &str) -> Result<disasm::Arch, String> {
-    use disasm::Arch::*;
-    Ok(match s.to_lowercase().replace(['_', ' '], "-").as_str() {
-        "x86-16" | "x86_16" | "16" => X86_16,
-        "x86-32" | "x86" | "32" => X86_32,
-        "x86-64" | "x64" | "amd64" | "64" => X86_64,
-        "arm" | "arm32" | "a32" => Arm,
-        "thumb" | "arm-thumb" => ArmThumb,
-        "aarch64" | "arm64" | "a64" => Aarch64,
-        "mips-le" | "mipsle" | "mips" => MipsLe,
-        "mips-be" | "mipsbe" => MipsBe,
-        "powerpc" | "ppc" => PowerPc,
-        "riscv32" | "riscv-32" | "rv32" => RiscV32,
-        "riscv64" | "riscv-64" | "rv64" | "riscv" => RiscV64,
-        "msp430" => Msp430,
-        "6502" => M6502,
-        "sm83" | "gameboy" | "gb" => Sm83,
-        other => return Err(format!("unknown arch: {other}")),
-    })
-}
-
-fn parse_format(s: &str) -> Result<export::Format, String> {
-    let n = s.to_lowercase();
-    export::Format::ALL
-        .iter()
-        .find(|f| f.name().to_lowercase() == n || f.extension() == n)
-        .copied()
-        .or_else(|| {
-            export::Format::ALL
-                .iter()
-                .find(|f| f.name().to_lowercase().contains(&n))
-                .copied()
-        })
-        .ok_or_else(|| format!("unknown export format: {s}"))
-}
 
 #[cfg(test)]
 mod tests {

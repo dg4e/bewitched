@@ -41,6 +41,29 @@ impl Arch {
         Arch::Sm83,
     ];
 
+    /// Parse an architecture from a user-supplied name/alias (case- and
+    /// separator-insensitive). Shared by the CLI and MCP front-ends.
+    pub fn from_name(s: &str) -> Result<Arch, String> {
+        use Arch::*;
+        Ok(match s.to_lowercase().replace(['_', ' '], "-").as_str() {
+            "x86-16" | "16" => X86_16,
+            "x86-32" | "x86" | "32" => X86_32,
+            "x86-64" | "x64" | "amd64" | "64" => X86_64,
+            "arm" | "arm32" | "a32" => Arm,
+            "thumb" | "arm-thumb" => ArmThumb,
+            "aarch64" | "arm64" | "a64" => Aarch64,
+            "mips-le" | "mipsle" | "mips" => MipsLe,
+            "mips-be" | "mipsbe" => MipsBe,
+            "powerpc" | "ppc" => PowerPc,
+            "riscv32" | "riscv-32" | "rv32" => RiscV32,
+            "riscv64" | "riscv-64" | "rv64" | "riscv" => RiscV64,
+            "msp430" => Msp430,
+            "6502" => M6502,
+            "sm83" | "gameboy" | "gb" => Sm83,
+            other => return Err(format!("unknown arch: {other}")),
+        })
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Arch::X86_16 => "x86-16",

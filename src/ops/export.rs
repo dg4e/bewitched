@@ -63,6 +63,18 @@ impl Format {
         Format::MotorolaSRecord,
     ];
 
+    /// Parse a format from a user-supplied name or extension (exact match first,
+    /// then a substring match on the name). Shared by the CLI and MCP front-ends.
+    pub fn from_name(s: &str) -> Result<Format, String> {
+        let n = s.to_lowercase();
+        Format::ALL
+            .iter()
+            .find(|f| f.name().to_lowercase() == n || f.extension() == n)
+            .or_else(|| Format::ALL.iter().find(|f| f.name().to_lowercase().contains(&n)))
+            .copied()
+            .ok_or_else(|| format!("unknown export format: {s}"))
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Format::C => "C source",

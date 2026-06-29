@@ -26,6 +26,26 @@ pub enum DataType {
     F64,
 }
 
+impl DataType {
+    /// Parse a data type from a user-supplied name/alias. Shared by the CLI and
+    /// MCP front-ends.
+    pub fn from_name(s: &str) -> Result<DataType, String> {
+        use DataType::*;
+        Ok(match s.to_lowercase().as_str() {
+            "text" | "ascii" => Text,
+            "utf16" | "unicode" => Utf16,
+            "hex" => Hex,
+            "i8" | "int8" => I8,
+            "i16" | "int16" => I16,
+            "i32" | "int32" => I32,
+            "i64" | "int64" => I64,
+            "f32" | "float" | "float32" => F32,
+            "f64" | "double" | "float64" => F64,
+            other => return Err(format!("unknown data type: {other}")),
+        })
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Endian {
     Little,
