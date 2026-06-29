@@ -477,6 +477,16 @@ impl App {
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show_rows(ui, row_h, total_rows, |ui, range| {
+                let range_start = range.start;
+                // Geometry of the first rendered row, used to map an absolute
+                // pointer position to a byte — so a click-drag tracks across rows
+                // (each row is a separate widget, so per-row hit-testing can't).
+                let mut grid_top: Option<f32> = None;
+                let mut grid_left: Option<f32> = None;
+                let mut press: Option<egui::Pos2> = None; // click / drag-start point
+                let mut drag_to: Option<egui::Pos2> = None; // current drag point
+                let mut is_click = false;
+
                 for r in range {
                     match vm.row(r).unwrap_or(RowItem::Data { base: r as u64 * bpr }) {
                         RowItem::Fold { region } => {
@@ -499,6 +509,10 @@ impl App {
                                 .sense(Sense::click())
                                 .selectable(false),
                             );
+                            if grid_top.is_none() {
+                                grid_top = Some(resp.rect.top());
+                                grid_left = Some(resp.rect.left());
+                            }
                             if resp.clicked() {
                                 self.regions[region].folded = false;
                                 self.scroll_to_cursor = true;
@@ -506,32 +520,83 @@ impl App {
                         }
                         RowItem::Data { base } => {
                             let resp = self.render_data_row(ui, base, &font, &layout, len);
+                            if grid_top.is_none() {
+                                grid_top = Some(resp.rect.top());
+                                grid_left = Some(resp.rect.left());
+                            }
                             if scroll_to && r == cursor_row {
                                 resp.scroll_to_me(Some(egui::Align::Center));
                             }
-                            if (resp.clicked() || resp.dragged()) && self.bg.is_none() {
-                                if let Some(pos) = resp.interact_pointer_pos() {
-                                    let relx = pos.x - resp.rect.left();
-                                    let col = (relx / char_w).floor();
-                                    if col >= 0.0 {
-                                        if let Some((i, pane, _nib)) =
-                                            layout.col_to_byte(col as usize)
-                                        {
-                                            let off = (base + i as u64).min(len);
-                                            let ctrl = ui.input(|inp| inp.modifiers.command);
-                                            if ctrl && resp.clicked() {
-                                                self.toggle_extra_cursor(off);
-                                            } else {
-                                                let extend = resp.dragged();
-                                                // Always land on the first (high)
-                                                // nibble of the clicked byte.
-                                                self.click_to(off, pane, 0, extend);
-                                            }
-                                        }
-                                    }
+                            if self.bg.is_none() {
+                                if resp.drag_started() {
+                                    press = resp.interact_pointer_pos();
+                                } else if resp.dragged() {
+                                    drag_to = resp.interact_pointer_pos();
+                                }
+                                if resp.clicked() {
+                                    press = resp.interact_pointer_pos();
+                                    is_click = true;
                                 }
                             }
                         }
+                    }
+                }
+
+                // Resolve the interaction against the grid geometry, then apply.
+                if grid_top.is_some() && (press.is_some() || drag_to.is_some()) {
+                    let map = |pos: egui::Pos2| -> Option<(u64, Pane)> {
+                        let top = grid_top?;
+                        let left = grid_left?;
+                        let rel = ((pos.y - top) / row_h).floor() as i64;
+                        let ridx = ((range_start as i64 + rel).max(0) as usize)
+                            .min(total_rows.saturating_sub(1));
+                        let base = match vm.row(ridx)? {
+                            RowItem::Data { base } => base,
+                            RowItem::Fold { region } => self.regions.get(region)?.start,
+                        };
+                        let relx = pos.x - left;
+                        if relx < 0.0 {
+                            return Some((base.min(len), Pane::Hex));
+                        }
+                        let col = (relx / char_w).floor() as usize;
+                        match layout.col_to_byte(col) {
+                            Some((i, pane, _)) => Some(((base + i as u64).min(len), pane)),
+                            // past the right edge: clamp to the last byte of the row
+                            None => Some(((base + bpr - 1).min(len), Pane::Hex)),
+                        }
+                    };
+                    let (shift, ctrl) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
+                    // Compute first so `map`'s borrow of `self.regions` ends before
+                    // we take `&mut self` below.
+                    let press_res = press.and_then(map);
+                    let drag_res = drag_to.and_then(map);
+
+                    if let Some((off, pane)) = press_res {
+                        if is_click && ctrl {
+                            self.toggle_extra_cursor(off);
+                        } else if is_click && shift {
+                            // shift-click extends the existing selection
+                            if self.sel_anchor.is_none() {
+                                self.sel_anchor = Some(self.cursor);
+                            }
+                            self.cursor = off;
+                            self.pane = pane;
+                            self.nibble = 0;
+                        } else {
+                            // plain click clears the selection; a drag anchors here
+                            self.sel_anchor = if is_click { None } else { Some(off) };
+                            self.cursor = off;
+                            self.pane = pane;
+                            self.nibble = 0;
+                        }
+                    }
+                    if let Some((off, pane)) = drag_res {
+                        if self.sel_anchor.is_none() {
+                            self.sel_anchor = Some(self.cursor);
+                        }
+                        self.cursor = off;
+                        self.pane = pane;
+                        self.nibble = 0;
                     }
                 }
             });
@@ -590,19 +655,6 @@ impl App {
                 .sense(Sense::click_and_drag())
                 .selectable(false),
         )
-    }
-
-    fn click_to(&mut self, off: u64, pane: Pane, nib: u8, extend: bool) {
-        if extend {
-            if self.sel_anchor.is_none() {
-                self.sel_anchor = Some(self.cursor);
-            }
-        } else {
-            self.sel_anchor = None;
-        }
-        self.cursor = off;
-        self.pane = pane;
-        self.nibble = nib;
     }
 
     // ---- keyboard ----
