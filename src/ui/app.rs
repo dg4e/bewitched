@@ -51,15 +51,15 @@ struct SearchState {
 }
 
 const TYPES: &[(&str, search::DataType)] = &[
-    ("Text", search::DataType::Text),
+    ("text", search::DataType::Text),
     ("Unicode (UTF-16)", search::DataType::Utf16),
-    ("Hex values", search::DataType::Hex),
-    ("Int8", search::DataType::I8),
-    ("Int16", search::DataType::I16),
-    ("Int32", search::DataType::I32),
-    ("Int64", search::DataType::I64),
-    ("Float32", search::DataType::F32),
-    ("Float64", search::DataType::F64),
+    ("hex values", search::DataType::Hex),
+    ("int8", search::DataType::I8),
+    ("int16", search::DataType::I16),
+    ("int32", search::DataType::I32),
+    ("int64", search::DataType::I64),
+    ("float32", search::DataType::F32),
+    ("float64", search::DataType::F64),
 ];
 
 #[derive(Default)]
@@ -889,7 +889,7 @@ impl App {
 
     fn do_refine(&mut self, refine: scan::Refine) {
         if self.scan.matches.is_empty() {
-            self.scan.status = "run First scan first".into();
+            self.scan.status = "run first scan first".into();
             return;
         }
         let ty = TYPES[self.scan.data_type].1;
@@ -974,7 +974,7 @@ impl App {
 
     fn create_ips(&mut self) {
         let Some(orig_path) = rfd::FileDialog::new()
-            .set_title("Pick the ORIGINAL (unpatched) file")
+            .set_title("pick the ORIGINAL (unpatched) file")
             .pick_file()
         else {
             return;
@@ -1003,7 +1003,7 @@ impl App {
     fn apply_ips(&mut self) {
         let Some(patch_path) = rfd::FileDialog::new()
             .add_filter("IPS", &["ips"])
-            .set_title("Pick an IPS patch")
+            .set_title("pick an IPS patch")
             .pick_file()
         else {
             return;
@@ -1029,7 +1029,7 @@ impl App {
 
     fn create_bps(&mut self) {
         let Some(orig_path) = rfd::FileDialog::new()
-            .set_title("Pick the ORIGINAL (unpatched) file")
+            .set_title("pick the ORIGINAL (unpatched) file")
             .pick_file()
         else {
             return;
@@ -1054,7 +1054,7 @@ impl App {
     fn apply_bps(&mut self) {
         let Some(patch_path) = rfd::FileDialog::new()
             .add_filter("BPS", &["bps"])
-            .set_title("Pick a BPS patch")
+            .set_title("pick a BPS patch")
             .pick_file()
         else {
             return;
@@ -1142,7 +1142,7 @@ impl App {
 
     fn do_diff(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Compare against…")
+            .set_title("compare against…")
             .pick_file()
         else {
             return;
@@ -1345,7 +1345,7 @@ impl App {
 
     // ---- printing ----
 
-    /// "Print" by rendering an HTML hex dump and handing it to the OS default
+    /// "print" by rendering an HTML hex dump and handing it to the OS default
     /// handler (typically the browser, which can print). Cross-platform.
     fn print(&mut self) {
         let (off, len) = self.scope(true);
@@ -1714,13 +1714,13 @@ const TRANSFORM_OPS: &[(&str, TKind, bool, bool)] = &[
     ("ADD key", TKind::Add, true, false),
     ("SUB key", TKind::Sub, true, false),
     ("NOT (invert)", TKind::Not, false, false),
-    ("Rotate left (bits)", TKind::Rol, false, true),
-    ("Rotate right (bits)", TKind::Ror, false, true),
+    ("rotate left (bits)", TKind::Rol, false, true),
+    ("rotate right (bits)", TKind::Ror, false, true),
     ("Shift left (bits)", TKind::Shl, false, true),
     ("Shift right (bits)", TKind::Shr, false, true),
-    ("Reverse bytes", TKind::Reverse, false, false),
-    ("Byte-swap (endian)", TKind::Swap, false, false),
-    ("Flip ASCII case", TKind::FlipCase, false, false),
+    ("reverse bytes", TKind::Reverse, false, false),
+    ("byte-swap (endian)", TKind::Swap, false, false),
+    ("flip ASCII case", TKind::FlipCase, false, false),
 ];
 
 /// Open a path with the operating system's default handler.

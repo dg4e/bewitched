@@ -39,11 +39,12 @@ pub fn run() -> eframe::Result<()> {
     }
 
     let (rgba, iw, ih) = icon::rgba(8);
+    let title = format!("bewitched {}", env!("CARGO_PKG_VERSION"));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 720.0])
             .with_min_inner_size([640.0, 360.0])
-            .with_title("bewitched")
+            .with_title(&title)
             .with_icon(egui::IconData {
                 rgba,
                 width: iw,

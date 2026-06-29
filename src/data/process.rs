@@ -91,7 +91,7 @@ pub fn privilege_note() -> &'static str {
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        "Reading another process's memory requires elevated privileges."
+        "reading another process's memory requires elevated privileges."
     }
 }
 

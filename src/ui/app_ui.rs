@@ -55,20 +55,20 @@ impl eframe::App for App {
 impl App {
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::menu::bar(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button("New").on_hover_text("Start a new, empty document").clicked() {
+            ui.menu_button("file", |ui| {
+                if ui.button("new").on_hover_text("start a new, empty document").clicked() {
                     self.new_doc();
                     ui.close_menu();
                 }
-                if ui.button("Open file…   Ctrl+O").on_hover_text("Open a file or device — memory-mapped, so even huge files open instantly").clicked() {
+                if ui.button("open file…   Ctrl+O").on_hover_text("open a file or device — memory-mapped, so even huge files open instantly").clicked() {
                     self.open_dialog();
                     ui.close_menu();
                 }
-                ui.menu_button("Open disk / RAM", |ui| {
+                ui.menu_button("open disk / RAM", |ui| {
                     ui.label(egui::RichText::new("raw devices").color(theme::GREEN_DIM));
                     ui.separator();
                     for dev in raw_targets() {
-                        if ui.button(&dev.0).on_hover_text("Open this device for raw read/write — requires elevated privileges").clicked() {
+                        if ui.button(&dev.0).on_hover_text("open this device for raw read/write — requires elevated privileges").clicked() {
                             self.open_path(PathBuf::from(&dev.1));
                             ui.close_menu();
                         }
@@ -81,88 +81,88 @@ impl App {
                     );
                 });
                 if ui
-                    .button("Open process memory…  (root/admin for other PIDs)")
-                    .on_hover_text("View/edit a running process's memory live. Your own PID needs no privileges; other processes require root / Administrator")
+                    .button("open process memory…  (root/admin for other PIDs)")
+                    .on_hover_text("view/edit a running process's memory live. your own PID needs no privileges; other processes require root / Administrator")
                     .clicked()
                 {
                     self.process_ui.open = true;
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Save   Ctrl+S").on_hover_text("Save to the current file (atomic temp-then-rename)").clicked() {
+                if ui.button("save   Ctrl+S").on_hover_text("save to the current file (atomic temp-then-rename)").clicked() {
                     self.save();
                     ui.close_menu();
                 }
-                if ui.button("Save as…").on_hover_text("Save the document to a new file").clicked() {
+                if ui.button("save as…").on_hover_text("save the document to a new file").clicked() {
                     self.save_as();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Print…   (opens hex dump in default viewer)").on_hover_text("Render a hex dump to HTML and open it in your default viewer/browser, which can print or save as PDF").clicked() {
+                if ui.button("print…   (opens hex dump in default viewer)").on_hover_text("render a hex dump to HTML and open it in your default viewer/browser, which can print or save as PDF").clicked() {
                     self.print();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Create IPS patch…   (diff vs original)").on_hover_text("Diff this document against an original file to make an IPS patch (classic format, ≤16 MiB)").clicked() {
+                if ui.button("create IPS patch…   (diff vs original)").on_hover_text("diff this document against an original file to make an IPS patch (classic format, ≤16 MiB)").clicked() {
                     self.create_ips();
                     ui.close_menu();
                 }
-                if ui.button("Apply IPS patch…").on_hover_text("Apply an IPS patch to the current document").clicked() {
+                if ui.button("apply IPS patch…").on_hover_text("apply an IPS patch to the current document").clicked() {
                     self.apply_ips();
                     ui.close_menu();
                 }
-                if ui.button("Create BPS patch…   (diff vs original)").on_hover_text("Diff against an original to make a BPS patch (any size, CRC-validated)").clicked() {
+                if ui.button("create BPS patch…   (diff vs original)").on_hover_text("diff against an original to make a BPS patch (any size, CRC-validated)").clicked() {
                     self.create_bps();
                     ui.close_menu();
                 }
-                if ui.button("Apply BPS patch…").on_hover_text("Apply a BPS patch (validates the source & target CRC-32)").clicked() {
+                if ui.button("apply BPS patch…").on_hover_text("apply a BPS patch (validates the source & target CRC-32)").clicked() {
                     self.apply_bps();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Save annotations (.bw)").on_hover_text("Save bookmarks, regions and notes to <file>.bw alongside the document (auto-loaded on reopen)").clicked() {
+                if ui.button("save annotations (.bw)").on_hover_text("save bookmarks, regions and notes to <file>.bw alongside the document (auto-loaded on reopen)").clicked() {
                     self.save_annotations();
                     ui.close_menu();
                 }
-                if ui.button("Load annotations…").on_hover_text("Load a .bw sidecar of bookmarks, regions and notes").clicked() {
+                if ui.button("load annotations…").on_hover_text("load a .bw sidecar of bookmarks, regions and notes").clicked() {
                     self.load_annotations_dialog();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Quit").on_hover_text("Close bewitched").clicked() {
+                if ui.button("quit").on_hover_text("close bewitched").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
 
-            ui.menu_button("Edit", |ui| {
-                if ui.add_enabled(self.doc.can_undo(), egui::Button::new("Undo   Ctrl+Z")).on_hover_text("Undo the last edit (unlimited history)").clicked() {
+            ui.menu_button("edit", |ui| {
+                if ui.add_enabled(self.doc.can_undo(), egui::Button::new("undo   Ctrl+Z")).on_hover_text("undo the last edit (unlimited history)").clicked() {
                     self.doc.undo();
                     self.scroll_to_cursor = true;
                     ui.close_menu();
                 }
-                if ui.add_enabled(self.doc.can_redo(), egui::Button::new("Redo   Ctrl+Y")).on_hover_text("Redo the last undone edit").clicked() {
+                if ui.add_enabled(self.doc.can_redo(), egui::Button::new("redo   Ctrl+Y")).on_hover_text("redo the last undone edit").clicked() {
                     self.doc.redo();
                     self.scroll_to_cursor = true;
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Cut   Ctrl+X").on_hover_text("Copy the selection (as hex) to the clipboard, then delete it").clicked() {
+                if ui.button("cut   Ctrl+X").on_hover_text("copy the selection (as hex) to the clipboard, then delete it").clicked() {
                     self.cut(ui.ctx());
                     ui.close_menu();
                 }
-                if ui.button("Copy   Ctrl+C").on_hover_text("Copy the selection to the clipboard as space-separated hex").clicked() {
+                if ui.button("copy   Ctrl+C").on_hover_text("copy the selection to the clipboard as space-separated hex").clicked() {
                     self.copy(ui.ctx());
                     ui.close_menu();
                 }
-                if ui.button("Paste (insert)   Ctrl+V").on_hover_text("Insert the clipboard bytes at the cursor, growing the file").clicked() {
+                if ui.button("paste (insert)   Ctrl+V").on_hover_text("insert the clipboard bytes at the cursor, growing the file").clicked() {
                     self.paste(false);
                     ui.close_menu();
                 }
-                if ui.button("Paste (overwrite)").on_hover_text("Overwrite bytes at the cursor with the clipboard, keeping the length").clicked() {
+                if ui.button("paste (overwrite)").on_hover_text("overwrite bytes at the cursor with the clipboard, keeping the length").clicked() {
                     self.paste(true);
                     ui.close_menu();
                 }
-                if ui.button("Select all   Ctrl+A").on_hover_text("Select the entire document").clicked() {
+                if ui.button("select all   Ctrl+a").on_hover_text("select the entire document").clicked() {
                     self.sel_anchor = Some(0);
                     self.cursor = self.doc.len().saturating_sub(1);
                     ui.close_menu();
@@ -171,9 +171,9 @@ impl App {
                     && ui
                         .add_enabled(
                             self.selection_range().is_some(),
-                            egui::Button::new("Poke selection → process"),
+                            egui::Button::new("poke selection → process"),
                         )
-                        .on_hover_text("Write the selected bytes straight into the live process's memory")
+                        .on_hover_text("write the selected bytes straight into the live process's memory")
                         .clicked()
                 {
                     self.poke_selection_to_process();
@@ -181,181 +181,177 @@ impl App {
                 }
                 ui.separator();
                 let mode_label = match self.mode {
-                    EditMode::Overwrite => "Mode: OVERWRITE  (Ins)",
-                    EditMode::Insert => "Mode: INSERT  (Ins)",
+                    EditMode::Overwrite => "mode: overwrite  (Ins)",
+                    EditMode::Insert => "mode: insert  (Ins)",
                 };
-                if ui.button(mode_label).on_hover_text("Toggle typing mode (Insert key). OVERWRITE replaces bytes (keeps length); INSERT adds bytes (grows the file)").clicked() {
+                if ui.button(mode_label).on_hover_text("toggle typing mode (insert key). overwrite replaces bytes (keeps length); insert adds bytes (grows the file)").clicked() {
                     self.toggle_mode();
                     ui.close_menu();
                 }
             });
 
-            ui.menu_button("View", |ui| {
-                ui.label("Character set").on_hover_text("How the text column decodes bytes to glyphs");
+            ui.menu_button("view", |ui| {
+                ui.label("character set").on_hover_text("how the text column decodes bytes to glyphs");
                 for cs in Charset::ALL {
-                    if ui.radio(self.charset == *cs, cs.name()).on_hover_text("Decode the text column with this character set").clicked() {
+                    if ui.radio(self.charset == *cs, cs.name()).on_hover_text("decode the text column with this character set").clicked() {
                         self.charset = *cs;
                     }
                 }
                 ui.separator();
-                ui.label("Byte grouping").on_hover_text("How many bytes are packed together (no space) per hex column");
+                ui.label("byte grouping").on_hover_text("how many bytes are packed together (no space) per hex column");
                 for g in [1usize, 2, 4, 8, 16] {
-                    if ui.radio(self.group == g, format!("{g} byte(s)")).on_hover_text("Group this many bytes per hex column").clicked() {
+                    if ui.radio(self.group == g, format!("{g} byte(s)")).on_hover_text("group this many bytes per hex column").clicked() {
                         self.group = g;
                     }
                 }
                 ui.separator();
-                ui.label("Columns (bytes/row)").on_hover_text("How many bytes are shown per row");
+                ui.label("columns (bytes/row)").on_hover_text("how many bytes are shown per row");
                 for c in [8usize, 16, 24, 32] {
-                    if ui.radio(self.bytes_per_row == c, format!("{c}")).on_hover_text("Show this many bytes per row").clicked() {
+                    if ui.radio(self.bytes_per_row == c, format!("{c}")).on_hover_text("show this many bytes per row").clicked() {
                         self.bytes_per_row = c;
                     }
                 }
                 ui.separator();
-                if ui.radio(self.view_mode == ViewMode::Both, "Hex + text").on_hover_text("Show both the hex and text columns").clicked() {
+                if ui.radio(self.view_mode == ViewMode::Both, "hex + text").on_hover_text("show both the hex and text columns").clicked() {
                     self.view_mode = ViewMode::Both;
                 }
-                if ui.radio(self.view_mode == ViewMode::HexOnly, "Hex only").on_hover_text("Show only the hex column").clicked() {
+                if ui.radio(self.view_mode == ViewMode::HexOnly, "hex only").on_hover_text("show only the hex column").clicked() {
                     self.view_mode = ViewMode::HexOnly;
                 }
-                if ui.radio(self.view_mode == ViewMode::TextOnly, "Text only").on_hover_text("Show only the text column").clicked() {
+                if ui.radio(self.view_mode == ViewMode::TextOnly, "text only").on_hover_text("show only the text column").clicked() {
                     self.view_mode = ViewMode::TextOnly;
                 }
                 ui.separator();
-                ui.checkbox(&mut self.inspector_open, "Data inspector panel")
-                    .on_hover_text("Toggle the side panel that decodes the bytes at the cursor as int/float/date/GUID/…");
+                ui.checkbox(&mut self.inspector_open, "data inspector panel")
+                    .on_hover_text("toggle the side panel that decodes the bytes at the cursor as int/float/date/GUID/…");
                 ui.separator();
-                ui.label("Data-folds / regions").on_hover_text("Collapse spans of the document into single marker rows");
-                if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("Fold selection")).on_hover_text("Collapse the selected range into a foldable region").clicked() {
+                ui.label("data-folds / regions").on_hover_text("collapse spans of the document into single marker rows");
+                if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("fold selection")).on_hover_text("collapse the selected range into a foldable region").clicked() {
                     self.fold_selection(true);
                     ui.close_menu();
                 }
-                if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("Fold selection (inaccessible)")).on_hover_text("Mark the selection inaccessible (hidden by default), e.g. unreadable memory").clicked() {
+                if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("fold selection (inaccessible)")).on_hover_text("mark the selection inaccessible (hidden by default), e.g. unreadable memory").clicked() {
                     self.fold_selection(false);
                     ui.close_menu();
                 }
-                if ui.add_enabled(!self.regions.is_empty(), egui::Button::new("Unfold all")).on_hover_text("Expand every folded region").clicked() {
+                if ui.add_enabled(!self.regions.is_empty(), egui::Button::new("unfold all")).on_hover_text("expand every folded region").clicked() {
                     self.unfold_all();
                     ui.close_menu();
                 }
-                if ui.button("Regions…").on_hover_text("Manage all regions: rename, fold/unfold, accessibility, delete").clicked() {
+                if ui.button("regions…").on_hover_text("manage all regions: rename, fold/unfold, accessibility, delete").clicked() {
                     self.regions_open = true;
                     ui.close_menu();
                 }
-                if ui.button("Notes / annotations…").on_hover_text("Add and browse free-text notes anchored to offsets/selections").clicked() {
+                if ui.button("notes / annotations…").on_hover_text("add and browse free-text notes anchored to offsets/selections").clicked() {
                     self.notes_open = true;
                     ui.close_menu();
                 }
             });
 
-            ui.menu_button("Search", |ui| {
-                if ui.button("Find / Replace…   Ctrl+F").on_hover_text("Search for text, Unicode, hex (with ? wildcards), integers or floats; forward/backward; replace").clicked() {
+            ui.menu_button("search", |ui| {
+                if ui.button("find / replace…   Ctrl+F").on_hover_text("search for text, Unicode, hex (with ? wildcards), integers or floats; forward/backward; replace").clicked() {
                     self.search.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Go to address…   Ctrl+G").on_hover_text("Jump the cursor to an offset (decimal, or 0x… hex)").clicked() {
+                if ui.button("go to address…   Ctrl+G").on_hover_text("jump the cursor to an offset (decimal, or 0x… hex)").clicked() {
                     self.goto.open = true;
                     ui.close_menu();
                 }
             });
 
-            ui.menu_button("Tools", |ui| {
-                if ui.button("Checksums / digests…").on_hover_text("Compute Checksum/CRC/Adler/MD5/SHA digests, or a custom CRC, over the file or selection").clicked() {
+            ui.menu_button("tools", |ui| {
+                if ui.button("checksums / digests…").on_hover_text("compute checksum/CRC/adler/MD5/SHA digests, or a custom CRC, over the file or selection").clicked() {
                     self.checksum.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Statistics / analysis…").on_hover_text("Byte distribution, Shannon entropy, a data-type guess, and an entropy map").clicked() {
+                if ui.button("statistics / analysis…").on_hover_text("byte distribution, Shannon entropy, a data-type guess, and an entropy map").clicked() {
                     self.stats.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Export…").on_hover_text("Export bytes as source code (C, Rust, Python, …), text (hex dump, HTML, Base64, …) or hex files (Intel HEX, S-record)").clicked() {
+                if ui.button("export…").on_hover_text("export bytes as source code (C, Rust, Python, …), text (hex dump, HTML, base64, …) or hex files (Intel HEX, S-record)").clicked() {
                     self.export.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Insert byte pattern…").on_hover_text("Insert, overwrite or fill with a repeating hex pattern").clicked() {
+                if ui.button("insert byte pattern…").on_hover_text("insert, overwrite or fill with a repeating hex pattern").clicked() {
                     self.pattern.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Transform selection…").on_hover_text("Apply XOR/AND/OR/ADD/NOT, rotate, shift, reverse, byte-swap or case-flip to the selection").clicked() {
+                if ui.button("transform selection…").on_hover_text("apply XOR/AND/OR/ADD/NOT, rotate, shift, reverse, byte-swap or case-flip to the selection").clicked() {
                     self.transform.open = true;
                     ui.close_menu();
                 }
-                ui.menu_button("Compression", |ui| {
-                    if ui.button("Decompress (auto-detect)").on_hover_text("Decompress the selection (or whole doc), auto-detecting gzip/zlib").clicked() {
+                ui.menu_button("compression", |ui| {
+                    if ui.button("decompress (auto-detect)").on_hover_text("decompress the selection (or whole doc), auto-detecting gzip/zlib").clicked() {
                         self.do_decompress();
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Compress — zlib").on_hover_text("Compress the selection (or whole doc) as zlib").clicked() {
+                    if ui.button("compress — zlib").on_hover_text("compress the selection (or whole doc) as zlib").clicked() {
                         self.do_compress(compress::Codec::Zlib);
                         ui.close_menu();
                     }
-                    if ui.button("Compress — gzip").on_hover_text("Compress the selection (or whole doc) as gzip").clicked() {
+                    if ui.button("compress — gzip").on_hover_text("compress the selection (or whole doc) as gzip").clicked() {
                         self.do_compress(compress::Codec::Gzip);
                         ui.close_menu();
                     }
-                    if ui.button("Compress — raw deflate").on_hover_text("Compress the selection (or whole doc) as raw DEFLATE").clicked() {
+                    if ui.button("compress — raw deflate").on_hover_text("compress the selection (or whole doc) as raw DEFLATE").clicked() {
                         self.do_compress(compress::Codec::Deflate);
                         ui.close_menu();
                     }
                 });
-                if ui.button("Extract strings…").on_hover_text("Find printable ASCII and UTF-16 strings; click a result to jump").clicked() {
+                if ui.button("extract strings…").on_hover_text("find printable ASCII and UTF-16 strings; click a result to jump").clicked() {
                     self.strings.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Value scanner (memory/save editing)…").on_hover_text("Cheat-Engine workflow: scan for a value, then narrow as it changes; write or freeze matches").clicked() {
+                if ui.button("value scanner (memory/save editing)…").on_hover_text("Cheat-Engine workflow: scan for a value, then narrow as it changes; write or freeze matches").clicked() {
                     self.scan.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Pointer scan…").on_hover_text("Find 64-bit pointers that reference a target address").clicked() {
+                if ui.button("pointer scan…").on_hover_text("find 64-bit pointers that reference a target address").clicked() {
                     self.ptrscan.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Find signatures (binwalk)…").on_hover_text("Locate embedded file formats, archives, executables and crypto constants by magic bytes").clicked() {
+                if ui.button("find signatures (binwalk)…").on_hover_text("locate embedded file formats, archives, executables and crypto constants by magic bytes").clicked() {
                     self.signatures.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Byte map (visualize)…").on_hover_text("Render the file as a colored image (one pixel per byte) to spot structure; click to jump").clicked() {
+                if ui.button("byte map (visualize)…").on_hover_text("render the file as a colored image (one pixel per byte) to spot structure; click to jump").clicked() {
                     self.byteplot.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Compare / diff (detailed)…").on_hover_text("Byte-diff against another file and list every differing range").clicked() {
+                if ui.button("compare / diff (detailed)…").on_hover_text("byte-diff against another file and list every differing range").clicked() {
                     self.diff.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Disassembly (x86/x64)…").on_hover_text("Disassemble at the cursor — x86/ARM/MIPS/PowerPC/RISC-V/MSP430/6502/SM83").clicked() {
+                if ui.button("disassembly (x86/x64)…").on_hover_text("disassemble at the cursor — x86/ARM/MIPS/PowerPC/RISC-V/MSP430/6502/SM83").clicked() {
                     self.disasm.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Binary template (structure view)…").on_hover_text("Parse the file into named, typed, editable fields with a flat template").clicked() {
+                if ui.button("binary template (structure view)…").on_hover_text("parse the file into named, typed, editable fields with a flat template").clicked() {
                     self.template.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Struct parser (nested tree)…").on_hover_text("Parse into a nested tree (sub-types, repeat, if, enums, expressions) — Kaitai-inspired").clicked() {
+                if ui.button("struct parser (nested tree)…").on_hover_text("parse into a nested tree (sub-types, repeat, if, enums, expressions) — Kaitai-inspired").clicked() {
                     self.kstruct.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Script (Rhai)…").on_hover_text("Run a sandboxed Rhai script over the selection/whole file (read/write bytes, search, CRC, …)").clicked() {
+                if ui.button("script (Rhai)…").on_hover_text("run a sandboxed Rhai script over the selection/whole file (read/write bytes, search, CRC, …)").clicked() {
                     self.script.open = true;
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("File tools (shred / split / concat / compare)…").on_hover_text("Securely shred a file, split it into parts, concatenate files, or compare two").clicked() {
+                if ui.button("file tools (shred / split / concat / compare)…").on_hover_text("securely shred a file, split it into parts, concatenate files, or compare two").clicked() {
                     self.tools.open = true;
                     ui.close_menu();
                 }
             });
 
-            ui.menu_button("Help", |ui| {
-                if ui.button("About bewitched").on_hover_text("Version and credits").clicked() {
+            ui.menu_button("help", |ui| {
+                if ui.button("about bewitched").on_hover_text("version and credits").clicked() {
                     self.about_open = true;
                     ui.close_menu();
                 }
             });
-
-            ui.separator();
-            ui.label(egui::RichText::new("bewitched").color(theme::GREEN).strong())
-                .on_hover_text("bewitched — a fast, cross-platform hex editor & binary-analysis toolkit");
         });
     }
 
@@ -370,18 +366,18 @@ impl App {
                     .color(theme::AMBER),
             )
             .on_hover_text(if self.doc.is_modified() {
-                "Current document — '*' means there are unsaved changes"
+                "current document — '*' means there are unsaved changes"
             } else {
-                "Current document (no unsaved changes)"
+                "current document (no unsaved changes)"
             });
             ui.separator();
             ui.label(format!("offset {:#X} ({})", self.cursor, self.cursor))
-                .on_hover_text("Cursor position — hex (and decimal). Use Search ▸ Go to address to jump");
+                .on_hover_text("cursor position — hex (and decimal). use search ▸ Go to address to jump");
             ui.separator();
             if self.cursor < self.doc.len() {
                 let b = self.byte_at(self.cursor);
                 ui.label(format!("byte {:02X} = {:3} = {:#010b}", b, b, b))
-                    .on_hover_text("The byte under the cursor: hex = decimal = binary");
+                    .on_hover_text("the byte under the cursor: hex = decimal = binary");
             }
             if let Some((s, e)) = self.selection_range() {
                 ui.separator();
@@ -389,20 +385,20 @@ impl App {
                     egui::RichText::new(format!("sel {:#X}..{:#X} ({} bytes)", s, e, e - s))
                         .color(theme::AMBER),
                 )
-                .on_hover_text("Current selection: start..end (exclusive) and length");
+                .on_hover_text("current selection: start..end (exclusive) and length");
             }
             ui.separator();
             ui.label(human(self.doc.len()))
-                .on_hover_text("Total document size");
+                .on_hover_text("total document size");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (mode, mode_tip) = match self.mode {
                     EditMode::Overwrite => (
                         "OVR",
-                        "OVERWRITE mode: typing replaces the byte under the cursor (length unchanged). Press Insert to switch to INS",
+                        "overwrite mode: typing replaces the byte under the cursor (length unchanged). press insert to switch to INS",
                     ),
                     EditMode::Insert => (
                         "INS",
-                        "INSERT mode: typing adds bytes at the cursor, growing the file. Press Insert to switch to OVR",
+                        "insert mode: typing adds bytes at the cursor, growing the file. press insert to switch to OVR",
                     ),
                 };
                 ui.label(egui::RichText::new(mode).color(theme::GREEN).strong())
@@ -410,7 +406,7 @@ impl App {
                 ui.separator();
                 if self.process_target.is_some() {
                     ui.label(
-                        egui::RichText::new("⏺ LIVE")
+                        egui::RichText::new("⏺ live")
                             .color(theme::RED)
                             .strong(),
                     )
@@ -823,11 +819,11 @@ impl App {
 
     fn search_window(&mut self, ctx: &egui::Context) {
         let mut open = self.search.open;
-        egui::Window::new("Find / Replace")
+        egui::Window::new("find / replace")
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
-                egui::ComboBox::from_label("Data type")
+                egui::ComboBox::from_label("data type")
                     .selected_text(TYPES[self.search.data_type].0)
                     .show_ui(ui, |ui| {
                         for (i, t) in TYPES.iter().enumerate() {
@@ -835,7 +831,7 @@ impl App {
                         }
                     });
                 ui.horizontal(|ui| {
-                    ui.label("Find:   ");
+                    ui.label("find:   ");
                     ui.text_edit_singleline(&mut self.search.needle);
                 });
                 if TYPES[self.search.data_type].1 == search::DataType::Hex {
@@ -846,32 +842,32 @@ impl App {
                     );
                 }
                 ui.horizontal(|ui| {
-                    ui.label("Replace:");
+                    ui.label("replace:");
                     ui.text_edit_singleline(&mut self.search.replace);
                 });
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.search.case_insensitive, "Ignore case")
-                        .on_hover_text("Case-insensitive match (text searches)");
-                    ui.checkbox(&mut self.search.big_endian, "Big-endian")
-                        .on_hover_text("Interpret integer/float needles as big-endian (most-significant byte first)");
+                    ui.checkbox(&mut self.search.case_insensitive, "ignore case")
+                        .on_hover_text("case-insensitive match (text searches)");
+                    ui.checkbox(&mut self.search.big_endian, "big-endian")
+                        .on_hover_text("interpret integer/float needles as big-endian (most-significant byte first)");
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("◀ Find prev").on_hover_text("Search backward from the cursor").clicked() {
+                    if ui.button("◀ find prev").on_hover_text("search backward from the cursor").clicked() {
                         self.do_find(search::Direction::Backward);
                     }
-                    if ui.button("Find next ▶").on_hover_text("Search forward from the cursor").clicked() {
+                    if ui.button("find next ▶").on_hover_text("search forward from the cursor").clicked() {
                         self.do_find(search::Direction::Forward);
                     }
-                    if ui.button("Find first").on_hover_text("Search from the start of the document").clicked() {
+                    if ui.button("find first").on_hover_text("search from the start of the document").clicked() {
                         self.do_find(search::Direction::All);
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Replace & find").on_hover_text("Replace the current match, then find the next one").clicked() {
+                    if ui.button("replace & find").on_hover_text("replace the current match, then find the next one").clicked() {
                         self.do_replace_one();
                     }
-                    if ui.button("Replace all").on_hover_text("Replace every occurrence in the document").clicked() {
+                    if ui.button("replace all").on_hover_text("replace every occurrence in the document").clicked() {
                         self.do_replace_all();
                     }
                 });
@@ -1005,13 +1001,13 @@ impl App {
 
     fn goto_window(&mut self, ctx: &egui::Context) {
         let mut open = self.goto.open;
-        egui::Window::new("Go to address")
+        egui::Window::new("go to address")
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.label("Address (0x.. hex, or decimal):");
+                ui.label("address (0x.. hex, or decimal):");
                 let resp = ui.text_edit_singleline(&mut self.goto.text);
-                let go = ui.button("Go").clicked()
+                let go = ui.button("go").clicked()
                     || (resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
                 if go {
                     match parse_addr(&self.goto.text) {
@@ -1031,11 +1027,11 @@ impl App {
 
     fn checksum_window(&mut self, ctx: &egui::Context) {
         let mut open = self.checksum.open;
-        egui::Window::new("Checksums / digests")
+        egui::Window::new("checksums / digests")
             .open(&mut open)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.checkbox(&mut self.checksum.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
+                ui.checkbox(&mut self.checksum.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
                 ui.separator();
                 egui::Grid::new("algos").num_columns(2).show(ui, |ui| {
                     for (i, a) in checksum::Algo::ALL.iter().enumerate() {
@@ -1046,7 +1042,7 @@ impl App {
                     }
                 });
                 ui.separator();
-                if ui.button("Compute").clicked() {
+                if ui.button("compute").clicked() {
                     let algos: Vec<checksum::Algo> = checksum::Algo::ALL
                         .iter()
                         .enumerate()
@@ -1084,31 +1080,31 @@ impl App {
                     self.write_hex_at_cursor(&hex);
                 }
                 ui.separator();
-                ui.collapsing("Custom CRC", |ui| {
+                ui.collapsing("custom CRC", |ui| {
                     ui.label(
                         egui::RichText::new("Rocksoft model — poly/init/xorout in hex")
                             .small()
                             .color(theme::GREEN_DIM),
                     );
                     egui::Grid::new("ccrc").num_columns(2).show(ui, |ui| {
-                        ui.label("Width (bits)");
+                        ui.label("width (bits)");
                         ui.add(egui::TextEdit::singleline(&mut self.checksum.crc_width).desired_width(80.0));
                         ui.end_row();
-                        ui.label("Poly");
+                        ui.label("poly");
                         ui.add(egui::TextEdit::singleline(&mut self.checksum.crc_poly).desired_width(160.0));
                         ui.end_row();
-                        ui.label("Init");
+                        ui.label("init");
                         ui.add(egui::TextEdit::singleline(&mut self.checksum.crc_init).desired_width(160.0));
                         ui.end_row();
-                        ui.label("XorOut");
+                        ui.label("xorout");
                         ui.add(egui::TextEdit::singleline(&mut self.checksum.crc_xorout).desired_width(160.0));
                         ui.end_row();
                     });
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.checksum.crc_refin, "RefIn");
-                        ui.checkbox(&mut self.checksum.crc_refout, "RefOut");
+                        ui.checkbox(&mut self.checksum.crc_refin, "refin");
+                        ui.checkbox(&mut self.checksum.crc_refout, "refout");
                     });
-                    if ui.button("Compute CRC").clicked() {
+                    if ui.button("compute CRC").clicked() {
                         self.compute_custom_crc();
                     }
                     if !self.checksum.crc_result.is_empty() {
@@ -1126,21 +1122,21 @@ impl App {
 
     fn stats_window(&mut self, ctx: &egui::Context) {
         let mut open = self.stats.open;
-        egui::Window::new("Statistics / analysis")
+        egui::Window::new("statistics / analysis")
             .open(&mut open)
             .resizable(true)
             .default_width(560.0)
             .show(ctx, |ui| {
-                ui.checkbox(&mut self.stats.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
+                ui.checkbox(&mut self.stats.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
                 ui.horizontal(|ui| {
-                    if ui.button("Analyze").clicked() {
+                    if ui.button("analyze").clicked() {
                         let (off, len) = self.scope(self.stats.whole_file);
                         let reader = self.doc.reader();
                         self.start_bg("analyzing", len, move |p| {
                             BgOutcome::Stats(Box::new(stats::analyze(&reader, off, len, &p)))
                         });
                     }
-                    if ui.button("Entropy map").clicked() {
+                    if ui.button("entropy map").clicked() {
                         self.do_entropy_map();
                     }
                 });
@@ -1168,7 +1164,7 @@ impl App {
                     ui.label(egui::RichText::new("byte distribution (0x00 → 0xFF)").color(theme::GREEN_DIM));
                     draw_distribution(ui, &s.counts);
                 } else {
-                    ui.label(egui::RichText::new("run Analyze to see the distribution").color(theme::GREEN_DIM));
+                    ui.label(egui::RichText::new("run analyze to see the distribution").color(theme::GREEN_DIM));
                 }
             });
         self.stats.open = open;
@@ -1176,29 +1172,29 @@ impl App {
 
     fn export_window(&mut self, ctx: &egui::Context) {
         let mut open = self.export.open;
-        egui::Window::new("Export")
+        egui::Window::new("export")
             .open(&mut open)
             .resizable(true)
             .default_width(560.0)
             .show(ctx, |ui| {
-                egui::ComboBox::from_label("Format")
+                egui::ComboBox::from_label("format")
                     .selected_text(export::Format::ALL[self.export.fmt].name())
                     .show_ui(ui, |ui| {
                         for (i, f) in export::Format::ALL.iter().enumerate() {
                             ui.selectable_value(&mut self.export.fmt, i, f.name());
                         }
                     });
-                ui.checkbox(&mut self.export.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
+                ui.checkbox(&mut self.export.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
                 ui.horizontal(|ui| {
-                    if ui.button("Preview").clicked() {
+                    if ui.button("preview").clicked() {
                         self.export.preview = self.gen_export();
                     }
-                    if ui.button("Copy to clipboard").clicked() {
+                    if ui.button("copy to clipboard").clicked() {
                         let s = self.gen_export();
                         ui.ctx().copy_text(s.clone());
                         self.export.preview = s;
                     }
-                    if ui.button("Save to file…").clicked() {
+                    if ui.button("save to file…").clicked() {
                         let s = self.gen_export();
                         let ext = export::Format::ALL[self.export.fmt].extension();
                         if let Some(p) = rfd::FileDialog::new().add_filter("export", &[ext]).save_file() {
@@ -1226,26 +1222,26 @@ impl App {
 
     fn pattern_window(&mut self, ctx: &egui::Context) {
         let mut open = self.pattern.open;
-        egui::Window::new("Insert byte pattern")
+        egui::Window::new("insert byte pattern")
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Pattern (hex):");
+                    ui.label("pattern (hex):");
                     ui.text_edit_singleline(&mut self.pattern.hex);
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Length (bytes):");
+                    ui.label("length (bytes):");
                     ui.text_edit_singleline(&mut self.pattern.count);
                 });
-                ui.radio_value(&mut self.pattern.mode, 0, "Insert at cursor")
-                    .on_hover_text("Insert the pattern at the cursor, growing the file");
-                ui.radio_value(&mut self.pattern.mode, 1, "Overwrite at cursor")
-                    .on_hover_text("Overwrite bytes at the cursor with the pattern");
-                ui.radio_value(&mut self.pattern.mode, 2, "Fill selection")
-                    .on_hover_text("Fill the current selection by repeating the pattern");
+                ui.radio_value(&mut self.pattern.mode, 0, "insert at cursor")
+                    .on_hover_text("insert the pattern at the cursor, growing the file");
+                ui.radio_value(&mut self.pattern.mode, 1, "overwrite at cursor")
+                    .on_hover_text("overwrite bytes at the cursor with the pattern");
+                ui.radio_value(&mut self.pattern.mode, 2, "fill selection")
+                    .on_hover_text("fill the current selection by repeating the pattern");
                 ui.separator();
-                if ui.button("Apply").on_hover_text("Write the byte pattern as configured above").clicked() {
+                if ui.button("apply").on_hover_text("write the byte pattern as configured above").clicked() {
                     self.apply_pattern();
                 }
             });
@@ -1287,16 +1283,16 @@ impl App {
 
     fn tools_window(&mut self, ctx: &egui::Context) {
         let mut open = self.tools.open;
-        egui::Window::new("File tools")
+        egui::Window::new("file tools")
             .open(&mut open)
             .resizable(false)
             .default_width(420.0)
             .show(ctx, |ui| {
-                ui.label(egui::RichText::new("Shredder — overwrite then delete").color(theme::GREEN));
+                ui.label(egui::RichText::new("shredder — overwrite then delete").color(theme::GREEN));
                 ui.horizontal(|ui| {
-                    ui.label("Passes:");
+                    ui.label("passes:");
                     ui.text_edit_singleline(&mut self.tools.shred_passes);
-                    if ui.button("Pick & shred…").clicked() {
+                    if ui.button("pick & shred…").clicked() {
                         if let Some(p) = rfd::FileDialog::new().pick_file() {
                             let passes: u32 = self.tools.shred_passes.trim().parse().unwrap_or(3);
                             let total = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
@@ -1312,11 +1308,11 @@ impl App {
                 ui.label(egui::RichText::new("note: on SSD/CoW filesystems overwrite may not hit original blocks").small().color(theme::GREEN_DIM));
                 ui.separator();
 
-                ui.label(egui::RichText::new("Split file into parts").color(theme::GREEN));
+                ui.label(egui::RichText::new("split file into parts").color(theme::GREEN));
                 ui.horizontal(|ui| {
-                    ui.label("Chunk size (bytes):");
+                    ui.label("chunk size (bytes):");
                     ui.text_edit_singleline(&mut self.tools.split_size);
-                    if ui.button("Pick & split…").clicked() {
+                    if ui.button("pick & split…").clicked() {
                         if let Some(p) = rfd::FileDialog::new().pick_file() {
                             let size: u64 = self.tools.split_size.trim().parse().unwrap_or(1 << 20);
                             let total = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
@@ -1331,16 +1327,16 @@ impl App {
                 });
                 ui.separator();
 
-                ui.label(egui::RichText::new("Concatenate files").color(theme::GREEN));
+                ui.label(egui::RichText::new("concatenate files").color(theme::GREEN));
                 ui.horizontal(|ui| {
-                    if ui.button("Pick inputs…").clicked() {
+                    if ui.button("pick inputs…").clicked() {
                         if let Some(files) = rfd::FileDialog::new().pick_files() {
                             self.tools.concat_inputs = files;
                         }
                     }
                     ui.label(format!("{} file(s) selected", self.tools.concat_inputs.len()));
                 });
-                if ui.button("Concatenate to…").clicked() && !self.tools.concat_inputs.is_empty() {
+                if ui.button("concatenate to…").clicked() && !self.tools.concat_inputs.is_empty() {
                     if let Some(out) = rfd::FileDialog::new().save_file() {
                         let inputs = self.tools.concat_inputs.clone();
                         let total: u64 = inputs.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum();
@@ -1354,11 +1350,11 @@ impl App {
                 }
                 ui.separator();
 
-                ui.label(egui::RichText::new("Compare two files").color(theme::GREEN));
-                if ui.button("Pick A then B…").clicked() {
+                ui.label(egui::RichText::new("compare two files").color(theme::GREEN));
+                if ui.button("pick a then B…").clicked() {
                     if let (Some(a), Some(b)) = (
-                        rfd::FileDialog::new().set_title("Pick file A").pick_file(),
-                        rfd::FileDialog::new().set_title("Pick file B").pick_file(),
+                        rfd::FileDialog::new().set_title("pick file a").pick_file(),
+                        rfd::FileDialog::new().set_title("pick file B").pick_file(),
                     ) {
                         self.start_bg("comparing", 0, move |pr| match fileops::compare(&a, &b, &pr) {
                             Ok(r) => {
@@ -1386,14 +1382,14 @@ impl App {
 
     fn regions_window(&mut self, ctx: &egui::Context) {
         let mut open = self.regions_open;
-        egui::Window::new("Regions / data-folds")
+        egui::Window::new("regions / data-folds")
             .open(&mut open)
             .resizable(true)
             .default_width(560.0)
             .show(ctx, |ui| {
                 ui.label(
                     egui::RichText::new(
-                        "Regions mark sections of the document. Folded regions collapse to a \
+                        "regions mark sections of the document. folded regions collapse to a \
                          single marker row; inaccessible regions (e.g. unreadable RAM) are \
                          hidden by default.",
                     )
@@ -1404,16 +1400,16 @@ impl App {
                     if ui
                         .add_enabled(
                             self.selection_range().is_some(),
-                            egui::Button::new("Fold selection"),
+                            egui::Button::new("fold selection"),
                         )
                         .clicked()
                     {
                         self.fold_selection(true);
                     }
-                    if ui.button("Unfold all").clicked() {
+                    if ui.button("unfold all").clicked() {
                         self.unfold_all();
                     }
-                    if ui.button("Clear all").clicked() {
+                    if ui.button("clear all").clicked() {
                         self.regions.clear();
                     }
                 });
@@ -1446,7 +1442,7 @@ impl App {
                     self.regions.remove(i);
                 }
                 if self.regions.is_empty() {
-                    ui.label(egui::RichText::new("no regions — select bytes then Fold selection").color(theme::GREEN_DIM));
+                    ui.label(egui::RichText::new("no regions — select bytes then fold selection").color(theme::GREEN_DIM));
                 }
             });
         self.regions_open = open;
@@ -1466,23 +1462,23 @@ impl App {
             .frame(egui::Frame::none().fill(theme::PANEL).inner_margin(8.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("DATA INSPECTOR").color(theme::GREEN).strong())
-                        .on_hover_text("Decodes the 16 bytes at the cursor as many data types at once");
-                    if ui.small_button("✕").on_hover_text("Close the inspector (also in the View menu)").clicked() {
+                    ui.label(egui::RichText::new("data inspector").color(theme::GREEN).strong())
+                        .on_hover_text("decodes the 16 bytes at the cursor as many data types at once");
+                    if ui.small_button("✕").on_hover_text("close the inspector (also in the view menu)").clicked() {
                         open = false;
                     }
                 });
                 ui.horizontal(|ui| {
                     ui.label("byte order:");
                     ui.selectable_value(&mut self.inspector_le, true, "LE")
-                        .on_hover_text("Little-endian: least-significant byte first (x86, ARM, …)");
+                        .on_hover_text("little-endian: least-significant byte first (x86, ARM, …)");
                     ui.selectable_value(&mut self.inspector_le, false, "BE")
-                        .on_hover_text("Big-endian: most-significant byte first (network order, some RISC)");
+                        .on_hover_text("big-endian: most-significant byte first (network order, some RISC)");
                 });
                 ui.label(
                     egui::RichText::new(format!("@ {:#X}", self.cursor)).color(theme::ADDR),
                 )
-                .on_hover_text("The offset being decoded (the cursor position)");
+                .on_hover_text("the offset being decoded (the cursor position)");
                 ui.separator();
                 let window = self.doc.read_range(self.cursor, 16);
                 let interps = inspect::inspect(&window, self.inspector_le);
@@ -1510,7 +1506,7 @@ impl App {
 
     fn transform_window(&mut self, ctx: &egui::Context) {
         let mut open = self.transform.open;
-        egui::Window::new("Transform selection")
+        egui::Window::new("transform selection")
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
@@ -1520,7 +1516,7 @@ impl App {
                             .color(theme::AMBER),
                     );
                 }
-                egui::ComboBox::from_label("Operation")
+                egui::ComboBox::from_label("operation")
                     .selected_text(TRANSFORM_OPS[self.transform.op].0)
                     .show_ui(ui, |ui| {
                         for (i, t) in TRANSFORM_OPS.iter().enumerate() {
@@ -1530,19 +1526,19 @@ impl App {
                 let (_, _, needs_key, needs_count) = TRANSFORM_OPS[self.transform.op];
                 if needs_key {
                     ui.horizontal(|ui| {
-                        ui.label("Key (hex byte):");
+                        ui.label("key (hex byte):");
                         ui.text_edit_singleline(&mut self.transform.key);
                     });
                 }
                 if needs_count {
                     ui.horizontal(|ui| {
-                        ui.label("Count (bits 0-8):");
+                        ui.label("count (bits 0-8):");
                         ui.text_edit_singleline(&mut self.transform.key);
                     });
                 }
                 if matches!(TRANSFORM_OPS[self.transform.op].1, TKind::Swap) {
                     ui.horizontal(|ui| {
-                        ui.label("Group size:");
+                        ui.label("group size:");
                         for g in [2usize, 4, 8] {
                             ui.selectable_value(&mut self.transform.swap_group, g, format!("{g}"));
                         }
@@ -1550,8 +1546,8 @@ impl App {
                 }
                 ui.separator();
                 if ui
-                    .add_enabled(self.selection_range().is_some(), egui::Button::new("Apply"))
-                    .on_hover_text("Apply the chosen transform to the selected bytes (undoable)")
+                    .add_enabled(self.selection_range().is_some(), egui::Button::new("apply"))
+                    .on_hover_text("apply the chosen transform to the selected bytes (undoable)")
                     .clicked()
                 {
                     self.apply_transform();
@@ -1563,7 +1559,7 @@ impl App {
     fn strings_window(&mut self, ctx: &egui::Context) {
         let mut open = self.strings.open;
         let mut jump: Option<(u64, u64)> = None;
-        egui::Window::new("Extract strings")
+        egui::Window::new("extract strings")
             .open(&mut open)
             .resizable(true)
             .default_width(520.0)
@@ -1573,10 +1569,10 @@ impl App {
                 // push the window (and its close button) off-screen.
                 ui.set_max_width(600.0);
                 ui.horizontal(|ui| {
-                    ui.label("Min length:");
+                    ui.label("min length:");
                     ui.add(egui::TextEdit::singleline(&mut self.strings.min_len).desired_width(48.0));
-                    ui.checkbox(&mut self.strings.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
-                    if ui.button("Scan").on_hover_text("Find printable strings in the file/selection").clicked() {
+                    ui.checkbox(&mut self.strings.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
+                    if ui.button("scan").on_hover_text("find printable strings in the file/selection").clicked() {
                         self.do_strings();
                     }
                 });
@@ -1601,13 +1597,13 @@ impl App {
                                             .color(theme::ADDR),
                                     )
                                     .sense(egui::Sense::click()))
-                                    .on_hover_text("Jump to and select this string")
+                                    .on_hover_text("jump to and select this string")
                                     .clicked()
                                 {
                                     jump = Some((f.offset, bytes));
                                 }
                                 let kind = match f.kind {
-                                    crate::ops::strings::Kind::Ascii => "A",
+                                    crate::ops::strings::Kind::Ascii => "a",
                                     crate::ops::strings::Kind::Utf16 => "U",
                                 };
                                 ui.label(egui::RichText::new(kind).color(theme::GREEN_DIM));
@@ -1631,20 +1627,20 @@ impl App {
     fn scan_window(&mut self, ctx: &egui::Context) {
         let mut open = self.scan.open;
         let mut jump: Option<u64> = None;
-        egui::Window::new("Value scanner")
+        egui::Window::new("value scanner")
             .open(&mut open)
             .resizable(true)
             .default_width(420.0)
             .show(ctx, |ui| {
                 ui.label(
                     egui::RichText::new(
-                        "First scan for a value, change it (in-game / by editing), then refine \
+                        "first scan for a value, change it (in-game / by editing), then refine \
                          until one address remains.",
                     )
                     .small()
                     .color(theme::GREEN_DIM),
                 );
-                egui::ComboBox::from_label("Type")
+                egui::ComboBox::from_label("type")
                     .selected_text(TYPES[self.scan.data_type].0)
                     .show_ui(ui, |ui| {
                         for (i, t) in TYPES.iter().enumerate() {
@@ -1652,48 +1648,48 @@ impl App {
                         }
                     });
                 ui.horizontal(|ui| {
-                    ui.label("Value:");
+                    ui.label("value:");
                     ui.text_edit_singleline(&mut self.scan.value);
                 });
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.scan.aligned, "Aligned");
-                    ui.checkbox(&mut self.scan.big_endian, "Big-endian");
+                    ui.checkbox(&mut self.scan.aligned, "aligned");
+                    ui.checkbox(&mut self.scan.big_endian, "big-endian");
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("First scan").on_hover_text("Find every address currently equal to the value above").clicked() {
+                    if ui.button("first scan").on_hover_text("find every address currently equal to the value above").clicked() {
                         self.do_first_scan();
                     }
-                    if ui.button("Next: equal").on_hover_text("Keep only matches still equal to the value above").clicked() {
+                    if ui.button("next: equal").on_hover_text("keep only matches still equal to the value above").clicked() {
                         if let Ok(n) = self.scan_needle() {
                             self.do_refine(scan::Refine::Eq(n));
                         }
                     }
-                    if ui.button("Changed").on_hover_text("Keep only matches whose value changed since the last scan").clicked() {
+                    if ui.button("changed").on_hover_text("keep only matches whose value changed since the last scan").clicked() {
                         self.do_refine(scan::Refine::Changed);
                     }
-                    if ui.button("Unchanged").on_hover_text("Keep only matches whose value stayed the same").clicked() {
+                    if ui.button("unchanged").on_hover_text("keep only matches whose value stayed the same").clicked() {
                         self.do_refine(scan::Refine::Unchanged);
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Increased").on_hover_text("Keep only matches whose value went up since the last scan").clicked() {
+                    if ui.button("increased").on_hover_text("keep only matches whose value went up since the last scan").clicked() {
                         self.do_refine(scan::Refine::Increased);
                     }
-                    if ui.button("Decreased").on_hover_text("Keep only matches whose value went down since the last scan").clicked() {
+                    if ui.button("decreased").on_hover_text("keep only matches whose value went down since the last scan").clicked() {
                         self.do_refine(scan::Refine::Decreased);
                     }
                     if ui
                         .add_enabled(
                             !self.scan.matches.is_empty(),
-                            egui::Button::new("Write value → all"),
+                            egui::Button::new("write value → all"),
                         )
-                        .on_hover_text("Write the value above into every matched address (pokes the live process if one is open)")
+                        .on_hover_text("write the value above into every matched address (pokes the live process if one is open)")
                         .clicked()
                     {
                         self.poke_value();
                     }
-                    if ui.button("Clear").on_hover_text("Discard the current match list").clicked() {
+                    if ui.button("clear").on_hover_text("discard the current match list").clicked() {
                         self.scan.matches.clear();
                         self.scan.status.clear();
                     }
@@ -1702,7 +1698,7 @@ impl App {
                     if ui
                         .add_enabled(
                             self.process_target.is_some() && !self.scan.matches.is_empty(),
-                            egui::Button::new("❄ Freeze matches"),
+                            egui::Button::new("❄ freeze matches"),
                         )
                         .on_hover_text("keep re-writing the value into the live process")
                         .clicked()
@@ -1714,7 +1710,7 @@ impl App {
                             egui::RichText::new(format!("❄ {} frozen", self.frozen.len()))
                                 .color(theme::RED),
                         );
-                        if ui.button("Unfreeze all").on_hover_text("Stop pinning frozen values").clicked() {
+                        if ui.button("unfreeze all").on_hover_text("stop pinning frozen values").clicked() {
                             self.unfreeze_all();
                         }
                     }
@@ -1765,32 +1761,32 @@ impl App {
     fn ptrscan_window(&mut self, ctx: &egui::Context) {
         let mut open = self.ptrscan.open;
         let mut jump: Option<u64> = None;
-        egui::Window::new("Pointer scan")
+        egui::Window::new("pointer scan")
             .open(&mut open)
             .resizable(true)
             .default_width(420.0)
             .show(ctx, |ui| {
                 ui.label(
                     egui::RichText::new(
-                        "Find 64-bit pointers into [target-maxoff, target]. Base = address of \
+                        "find 64-bit pointers into [target-maxoff, target]. base = address of \
                          byte 0 of this image (0 for a file).",
                     )
                     .small()
                     .color(theme::GREEN_DIM),
                 );
                 egui::Grid::new("ptrscan_in").num_columns(2).show(ui, |ui| {
-                    ui.label("Target addr");
+                    ui.label("target addr");
                     ui.add(egui::TextEdit::singleline(&mut self.ptrscan.target).hint_text("0x…"));
                     ui.end_row();
-                    ui.label("Image base");
+                    ui.label("image base");
                     ui.add(egui::TextEdit::singleline(&mut self.ptrscan.base).hint_text("0"));
                     ui.end_row();
-                    ui.label("Max offset");
+                    ui.label("max offset");
                     ui.add(egui::TextEdit::singleline(&mut self.ptrscan.max_offset));
                     ui.end_row();
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Scan").clicked() {
+                    if ui.button("scan").clicked() {
                         self.do_ptrscan();
                     }
                     if !self.ptrscan.status.is_empty() {
@@ -1830,13 +1826,13 @@ impl App {
     fn signatures_window(&mut self, ctx: &egui::Context) {
         let mut open = self.signatures.open;
         let mut jump: Option<u64> = None;
-        egui::Window::new("Signatures (binwalk)")
+        egui::Window::new("signatures (binwalk)")
             .open(&mut open)
             .resizable(true)
             .default_width(460.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("Scan file").clicked() {
+                    if ui.button("scan file").clicked() {
                         self.do_signatures();
                     }
                     ui.label(
@@ -1882,12 +1878,12 @@ impl App {
         let mut render = false;
         let mut jump: Option<u64> = None;
         let len = self.doc.len();
-        egui::Window::new("Byte map")
+        egui::Window::new("byte map")
             .open(&mut open)
             .resizable(true)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("Render").clicked() {
+                    if ui.button("render").clicked() {
                         render = true;
                     }
                     ui.label(
@@ -1917,7 +1913,7 @@ impl App {
                         egui::RichText::new("click a pixel to jump there").small().color(theme::GREEN_DIM),
                     );
                 } else {
-                    ui.label(egui::RichText::new("press Render").color(theme::GREEN_DIM));
+                    ui.label(egui::RichText::new("press render").color(theme::GREEN_DIM));
                 }
             });
         if render {
@@ -1932,13 +1928,13 @@ impl App {
     fn diff_window(&mut self, ctx: &egui::Context) {
         let mut open = self.diff.open;
         let mut jump: Option<u64> = None;
-        egui::Window::new("Compare / diff")
+        egui::Window::new("compare / diff")
             .open(&mut open)
             .resizable(true)
             .default_width(460.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("Pick file & diff").clicked() {
+                    if ui.button("pick file & diff").clicked() {
                         self.do_diff();
                     }
                     if let Some(p) = &self.diff.other {
@@ -1983,16 +1979,16 @@ impl App {
     fn disasm_window(&mut self, ctx: &egui::Context) {
         let mut open = self.disasm.open;
         let mut jump: Option<u64> = None;
-        egui::Window::new("Disassembly")
+        egui::Window::new("disassembly")
             .open(&mut open)
             .resizable(true)
             .default_width(460.0)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Arch:").on_hover_text("Instruction set to decode the bytes at the cursor as");
+                    ui.label("arch:").on_hover_text("instruction set to decode the bytes at the cursor as");
                     for a in disasm::Arch::ALL {
                         ui.selectable_value(&mut self.disasm.arch, *a, a.label())
-                            .on_hover_text("Disassemble using this architecture");
+                            .on_hover_text("disassemble using this architecture");
                     }
                 });
                 ui.label(
@@ -2035,13 +2031,13 @@ impl App {
         use crate::ops::kstruct;
         let mut open = self.kstruct.open;
         let mut jump: Option<u64> = None;
-        egui::Window::new("Struct parser")
+        egui::Window::new("struct parser")
             .open(&mut open)
             .resizable(true)
             .default_width(620.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    egui::ComboBox::from_label("Built-in")
+                    egui::ComboBox::from_label("built-in")
                         .selected_text(kstruct::BUILTINS[self.kstruct.builtin].0)
                         .show_ui(ui, |ui| {
                             for (i, (name, _)) in kstruct::BUILTINS.iter().enumerate() {
@@ -2050,7 +2046,7 @@ impl App {
                                 }
                             }
                         });
-                    if ui.button("Parse at cursor").on_hover_text("Parse the document from the cursor with the schema above, into a tree").clicked() {
+                    if ui.button("parse at cursor").on_hover_text("parse the document from the cursor with the schema above, into a tree").clicked() {
                         self.apply_kstruct();
                     }
                 });
@@ -2075,7 +2071,7 @@ impl App {
                             kstruct_node_ui(ui, c, &mut jump);
                         }
                     } else {
-                        ui.label(egui::RichText::new("press Parse").color(theme::GREEN_DIM));
+                        ui.label(egui::RichText::new("press parse").color(theme::GREEN_DIM));
                     }
                 });
             });
@@ -2088,13 +2084,13 @@ impl App {
     fn template_window(&mut self, ctx: &egui::Context) {
         let mut open = self.template.open;
         let mut jump: Option<u64> = None;
-        egui::Window::new("Binary template")
+        egui::Window::new("binary template")
             .open(&mut open)
             .resizable(true)
             .default_width(560.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    egui::ComboBox::from_label("Built-in")
+                    egui::ComboBox::from_label("built-in")
                         .selected_text(template::BUILTINS[self.template.builtin].0)
                         .show_ui(ui, |ui| {
                             for (i, (name, _)) in template::BUILTINS.iter().enumerate() {
@@ -2106,7 +2102,7 @@ impl App {
                                 }
                             }
                         });
-                    if ui.button("Apply at cursor").on_hover_text("Parse fields from the cursor with the template above").clicked() {
+                    if ui.button("apply at cursor").on_hover_text("parse fields from the cursor with the template above").clicked() {
                         self.apply_template();
                     }
                 });
@@ -2135,12 +2131,12 @@ impl App {
                                 egui::TextEdit::singleline(&mut self.template.edit_buf)
                                     .desired_width(160.0),
                             );
-                            if ui.button("Write").clicked()
+                            if ui.button("write").clicked()
                                 || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                             {
                                 do_write = true;
                             }
-                            if ui.button("Cancel").clicked() {
+                            if ui.button("cancel").clicked() {
                                 self.template.edit_idx = None;
                             }
                         });
@@ -2198,18 +2194,18 @@ impl App {
 
     fn script_window(&mut self, ctx: &egui::Context) {
         let mut open = self.script.open;
-        egui::Window::new("Script (Rhai)")
+        egui::Window::new("script (Rhai)")
             .open(&mut open)
             .resizable(true)
             .default_width(560.0)
             .show(ctx, |ui| {
                 let mut load_src: Option<String> = None;
                 ui.horizontal(|ui| {
-                    if ui.button("Run").clicked() {
+                    if ui.button("run").clicked() {
                         self.run_script();
                     }
-                    ui.checkbox(&mut self.script.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
-                    egui::ComboBox::from_label("Load")
+                    ui.checkbox(&mut self.script.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
+                    egui::ComboBox::from_label("load")
                         .selected_text("library / saved")
                         .show_ui(ui, |ui| {
                             ui.label(egui::RichText::new("built-in").color(theme::GREEN_DIM));
@@ -2234,13 +2230,13 @@ impl App {
                     self.script.src = s;
                 }
                 ui.horizontal(|ui| {
-                    ui.label("Save as:");
+                    ui.label("save as:");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.script.save_name)
                             .desired_width(160.0)
                             .hint_text("name"),
                     );
-                    if ui.button("Save script").clicked() {
+                    if ui.button("save script").clicked() {
                         match crate::ops::script_store::save(&self.script.save_name, &self.script.src) {
                             Ok(p) => self.script.output = format!("saved {}", p.display()),
                             Err(e) => self.script.output = format!("save failed: {e}"),
@@ -2279,7 +2275,7 @@ impl App {
     fn process_window(&mut self, ctx: &egui::Context) {
         let mut open = self.process_ui.open;
         let mut pick: Option<(u64, u64)> = None;
-        egui::Window::new("Open process memory")
+        egui::Window::new("open process memory")
             .open(&mut open)
             .resizable(true)
             .default_width(520.0)
@@ -2294,14 +2290,14 @@ impl App {
                     .rounding(2.0)
                     .show(ui, |ui| {
                         ui.label(
-                            egui::RichText::new("⚠  ADMINISTRATOR / ROOT REQUIRED")
+                            egui::RichText::new("⚠  administrator / root required")
                                 .color(theme::RED)
                                 .strong(),
                         );
                         ui.label(
                             egui::RichText::new(
-                                "Reading or writing ANOTHER process's memory needs elevated \
-                                 privileges. Your own PID works without them.",
+                                "reading or writing another process's memory needs elevated \
+                                 privileges. your own PID works without them.",
                             )
                             .color(theme::AMBER),
                         );
@@ -2311,12 +2307,12 @@ impl App {
                                 .color(theme::GREEN_DIM),
                         );
                         let status = if elevated {
-                            egui::RichText::new("● running ELEVATED — you can attach to other processes")
+                            egui::RichText::new("● running elevated — you can attach to other processes")
                                 .color(theme::GREEN)
                         } else {
                             egui::RichText::new(format!(
-                                "● running UNPRIVILEGED — only your own PID ({own}) is openable; \
-                                 relaunch with sudo / as Administrator for others"
+                                "● running unprivileged — only your own PID ({own}) is openable; \
+                                 relaunch with sudo / as administrator for others"
                             ))
                             .color(theme::RED)
                         };
@@ -2326,7 +2322,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("PID:");
                     ui.add(egui::TextEdit::singleline(&mut self.process_ui.pid).desired_width(80.0));
-                    if ui.button("List regions").clicked() {
+                    if ui.button("list regions").clicked() {
                         self.list_process_regions();
                     }
                     if ui.button(format!("use self ({})", std::process::id())).clicked() {
@@ -2335,11 +2331,11 @@ impl App {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Base:");
+                    ui.label("base:");
                     ui.add(egui::TextEdit::singleline(&mut self.process_ui.base).desired_width(140.0));
-                    ui.label("Length:");
+                    ui.label("length:");
                     ui.add(egui::TextEdit::singleline(&mut self.process_ui.len).desired_width(100.0));
-                    if ui.button("Open live view").clicked() {
+                    if ui.button("open live view").clicked() {
                         self.open_process();
                     }
                 });
@@ -2391,13 +2387,13 @@ impl App {
         let mut open = self.notes_open;
         let mut jump: Option<u64> = None;
         let mut remove: Option<usize> = None;
-        egui::Window::new("Notes / annotations")
+        egui::Window::new("notes / annotations")
             .open(&mut open)
             .resizable(true)
             .default_width(520.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Note:");
+                    ui.label("note:");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.note_input)
                             .desired_width(280.0)
@@ -2413,7 +2409,7 @@ impl App {
                 });
                 ui.label(
                     egui::RichText::new(
-                        "notes are saved to <file>.bw via File ▸ Save annotations, and \
+                        "notes are saved to <file>.bw via file ▸ save annotations, and \
                          auto-loaded when you reopen the file",
                     )
                     .small()
@@ -2461,7 +2457,7 @@ impl App {
 
     fn about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.about_open;
-        egui::Window::new("About bewitched")
+        egui::Window::new("about bewitched")
             .open(&mut open)
             .resizable(false)
             .collapsible(false)
@@ -2610,7 +2606,7 @@ impl App {
                         "…".into()
                     }
                 ));
-                if ui.button("Cancel").clicked() {
+                if ui.button("cancel").clicked() {
                     cancel = true;
                 }
             });
@@ -2859,23 +2855,23 @@ fn raw_targets() -> Vec<(String, String)> {
     #[cfg(target_os = "macos")]
     {
         vec![
-            ("Whole disk 0 (/dev/rdisk0)".into(), "/dev/rdisk0".into()),
-            ("Disk 1 (/dev/rdisk1)".into(), "/dev/rdisk1".into()),
+            ("whole disk 0 (/dev/rdisk0)".into(), "/dev/rdisk0".into()),
+            ("disk 1 (/dev/rdisk1)".into(), "/dev/rdisk1".into()),
         ]
     }
     #[cfg(target_os = "linux")]
     {
         vec![
-            ("First disk (/dev/sda)".into(), "/dev/sda".into()),
+            ("first disk (/dev/sda)".into(), "/dev/sda".into()),
             ("NVMe 0 (/dev/nvme0n1)".into(), "/dev/nvme0n1".into()),
-            ("Physical RAM (/dev/mem)".into(), "/dev/mem".into()),
+            ("physical RAM (/dev/mem)".into(), "/dev/mem".into()),
         ]
     }
     #[cfg(target_os = "windows")]
     {
         vec![
-            ("Physical drive 0".into(), "\\\\.\\PhysicalDrive0".into()),
-            ("Volume C:".into(), "\\\\.\\C:".into()),
+            ("physical drive 0".into(), "\\\\.\\PhysicalDrive0".into()),
+            ("volume C:".into(), "\\\\.\\C:".into()),
         ]
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
