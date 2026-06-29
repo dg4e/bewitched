@@ -2464,13 +2464,121 @@ impl App {
         egui::Window::new("About bewitched")
             .open(&mut open)
             .resizable(false)
+            .collapsible(false)
             .show(ctx, |ui| {
-                ui.label(egui::RichText::new("bewitched 0.1.0").heading().color(theme::GREEN));
-                ui.label("a fast, cross-platform, hacker-esque hex editor");
-                ui.label("for files, raw disks and RAM — up to 8 EB.");
-                ui.separator();
-                ui.label(egui::RichText::new("piece-table engine · mmap · unlimited undo").color(theme::GREEN_DIM));
-                ui.label(egui::RichText::new("egui · pure Rust").color(theme::GREEN_DIM));
+                ui.ctx().request_repaint(); // keep the demo animating
+                let t = ui.input(|i| i.time) as f32;
+                let (resp, painter) =
+                    ui.allocate_painter(egui::vec2(480.0, 320.0), egui::Sense::hover());
+                let rect = resp.rect;
+                let cx = rect.center().x;
+
+                // ---- animated plasma background (dim, so text stays readable) ----
+                let (cols, rows) = (30usize, 20usize);
+                let cw = rect.width() / cols as f32;
+                let chh = rect.height() / rows as f32;
+                for gy in 0..rows {
+                    for gx in 0..cols {
+                        let (fx, fy) = (gx as f32, gy as f32);
+                        let v = (fx * 0.35 + t * 1.3).sin()
+                            + (fy * 0.42 + t * 1.7).sin()
+                            + ((fx + fy) * 0.25 + t).sin()
+                            + ((fx * fx + fy * fy).sqrt() * 0.30 - t * 2.0).sin();
+                        let col = hsv((v * 0.12 + t * 0.08).rem_euclid(1.0), 0.85, 0.22);
+                        painter.rect_filled(
+                            egui::Rect::from_min_size(
+                                egui::pos2(rect.left() + fx * cw, rect.top() + fy * chh),
+                                egui::vec2(cw + 1.0, chh + 1.0),
+                            ),
+                            0.0,
+                            col,
+                        );
+                    }
+                }
+
+                // ---- twinkling starfield ----
+                for i in 0..48 {
+                    let fi = i as f32;
+                    let sx = rect.left() + (fi * 97.13).rem_euclid(rect.width());
+                    let sy = rect.top() + (fi * 53.7).rem_euclid(rect.height());
+                    let tw = (t * 3.0 + fi).sin() * 0.5 + 0.5;
+                    painter.circle_filled(
+                        egui::pos2(sx, sy),
+                        0.8 + tw * 1.4,
+                        egui::Color32::from_white_alpha((tw * 210.0) as u8),
+                    );
+                }
+
+                // ---- big rainbow sine-wave title ----
+                let tf = egui::FontId::new(34.0, egui::FontFamily::Monospace);
+                let tcw = ui.fonts(|f| f.glyph_width(&tf, 'M'));
+                wave_text(&painter, "BEWITCHED", tcw, cx, rect.top() + 64.0, &tf, t, 12.0, 0.40, 0.06);
+
+                // ---- author / version line ----
+                let bf = egui::FontId::new(17.0, egui::FontFamily::Monospace);
+                let bcw = ui.fonts(|f| f.glyph_width(&bf, 'M'));
+                let ver = format!("v{}  by ytcracker and clord", env!("CARGO_PKG_VERSION"));
+                wave_text(&painter, &ver, bcw, cx, rect.top() + 120.0, &bf, t, 6.0, 0.55, 0.04);
+
+                // ---- pulsing tagline ----
+                let pulse = (t * 3.0).sin() * 0.5 + 0.5;
+                let sf = egui::FontId::new(13.0, egui::FontFamily::Monospace);
+                painter.text(
+                    egui::pos2(cx, rect.top() + 158.0),
+                    egui::Align2::CENTER_CENTER,
+                    "* a hex editor with no chill *",
+                    sf,
+                    hsv((t * 0.2).rem_euclid(1.0), 0.6, 0.6 + pulse * 0.4),
+                );
+
+                // ---- scrolling marquee (the greetz / copyright) ----
+                let mf = egui::FontId::new(18.0, egui::FontFamily::Monospace);
+                let mcw = ui.fonts(|f| f.glyph_width(&mf, 'M'));
+                let msg = "(C) 2026 DIGITAL GANGSTER ENTERPRISES, LLC    \u{2588}\u{2593}\u{2592}\u{2591}    \
+                           GREETINGS TO THE ENTIRE SCENE    \u{2591}\u{2592}\u{2593}\u{2588}    \
+                           NO BYTE LEFT UNTURNED    \u{2588}\u{2593}\u{2592}\u{2591}    ";
+                let msg_w = msg.chars().count() as f32 * mcw;
+                let scroll = rect.right() - (t * 115.0).rem_euclid(rect.width() + msg_w);
+                let my = rect.bottom() - 26.0;
+                // a dark band behind the scroller for legibility
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.left(), my - 16.0),
+                        egui::pos2(rect.right(), my + 16.0),
+                    ),
+                    0.0,
+                    egui::Color32::from_black_alpha(150),
+                );
+                for (i, ch) in msg.chars().enumerate() {
+                    let x = scroll + i as f32 * mcw;
+                    if x < rect.left() - mcw || x > rect.right() + mcw {
+                        continue;
+                    }
+                    let bob = (t * 6.0 + i as f32 * 0.4).sin() * 5.0;
+                    let col = hsv((t * 0.6 + i as f32 * 0.03).rem_euclid(1.0), 1.0, 1.0);
+                    painter.text(
+                        egui::pos2(x + 1.0, my + bob + 1.0),
+                        egui::Align2::LEFT_CENTER,
+                        ch,
+                        mf.clone(),
+                        egui::Color32::from_black_alpha(180),
+                    );
+                    painter.text(
+                        egui::pos2(x, my + bob),
+                        egui::Align2::LEFT_CENTER,
+                        ch,
+                        mf.clone(),
+                        col,
+                    );
+                }
+
+                // ---- flashing rainbow frame ----
+                let bw = 2.0 + (t * 4.0).sin().abs() * 2.0;
+                painter.rect_stroke(
+                    rect.shrink(bw * 0.5),
+                    0.0,
+                    egui::Stroke::new(bw, hsv((t * 0.7).rem_euclid(1.0), 1.0, 1.0)),
+                );
             });
         self.about_open = open;
     }
@@ -2643,6 +2751,62 @@ fn kstruct_node_ui(ui: &mut egui::Ui, node: &crate::ops::kstruct::Node, jump: &m
                     kstruct_node_ui(ui, c, jump);
                 }
             });
+    }
+}
+
+/// HSV → RGB (h,s,v in 0..1) for the cracktro color cycling.
+fn hsv(h: f32, s: f32, v: f32) -> egui::Color32 {
+    let h6 = h.rem_euclid(1.0) * 6.0;
+    let i = h6.floor() as i32;
+    let f = h6 - i as f32;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let u = v * (1.0 - s * (1.0 - f));
+    let (r, g, b) = match i.rem_euclid(6) {
+        0 => (v, u, p),
+        1 => (q, v, p),
+        2 => (p, v, u),
+        3 => (p, q, v),
+        4 => (u, p, v),
+        _ => (v, p, q),
+    };
+    egui::Color32::from_rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+}
+
+/// Draw centered, per-character rainbow + sine-wave text (with a drop shadow).
+#[allow(clippy::too_many_arguments)]
+fn wave_text(
+    painter: &egui::Painter,
+    text: &str,
+    cw: f32,
+    cx: f32,
+    cy: f32,
+    font: &egui::FontId,
+    t: f32,
+    amp: f32,
+    hue_speed: f32,
+    hue_step: f32,
+) {
+    let total = text.chars().count() as f32 * cw;
+    let x0 = cx - total / 2.0;
+    for (i, ch) in text.chars().enumerate() {
+        let x = x0 + i as f32 * cw + cw / 2.0;
+        let bob = (t * 4.0 + i as f32 * 0.5).sin() * amp;
+        let col = hsv((t * hue_speed + i as f32 * hue_step).rem_euclid(1.0), 1.0, 1.0);
+        painter.text(
+            egui::pos2(x + 1.5, cy + bob + 1.5),
+            egui::Align2::CENTER_CENTER,
+            ch,
+            font.clone(),
+            egui::Color32::from_black_alpha(180),
+        );
+        painter.text(
+            egui::pos2(x, cy + bob),
+            egui::Align2::CENTER_CENTER,
+            ch,
+            font.clone(),
+            col,
+        );
     }
 }
 
