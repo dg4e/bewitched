@@ -1363,6 +1363,9 @@ impl App {
         egui::SidePanel::right("inspector")
             .resizable(true)
             .default_width(260.0)
+            // Clamp the width so a long, unbreakable value (e.g. a denormalized
+            // float string) can't grow the panel to fill the screen.
+            .width_range(egui::Rangef::new(180.0, 460.0))
             .frame(egui::Frame::none().fill(theme::PANEL).inner_margin(8.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -1388,7 +1391,15 @@ impl App {
                     .show(ui, |ui| {
                         for it in &interps {
                             ui.label(egui::RichText::new(it.label).color(theme::GREEN_DIM));
-                            ui.label(egui::RichText::new(&it.value).color(theme::GREEN).monospace());
+                            // Truncate long, unbreakable values so the grid column
+                            // can't force the panel wider; full value on hover.
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&it.value).color(theme::GREEN).monospace(),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(&it.value);
                             ui.end_row();
                         }
                     });
