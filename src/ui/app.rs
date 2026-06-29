@@ -372,6 +372,9 @@ pub struct App {
     extra_cursors: Vec<u64>,
     status: String,
     scroll_to_cursor: bool,
+    /// One-shot: hard-center the cursor row (a jump from a tool window / goto),
+    /// as opposed to the gentle reveal used by keyboard navigation.
+    center_cursor: bool,
     page_rows: usize,
     /// Visible visual-row range from the previous frame [first, last), so a
     /// programmatic jump can tell whether the cursor is off-screen.
@@ -443,6 +446,7 @@ impl App {
             extra_cursors: Vec::new(),
             status,
             scroll_to_cursor: false,
+            center_cursor: false,
             page_rows: 16,
             last_row_range: (0, 0),
             bg: None,
@@ -1411,18 +1415,26 @@ impl App {
         self.scroll_to_cursor = true;
     }
 
-    /// Select `[start, start+len)` and scroll it into view.
+    /// Jump the cursor to `off` (from a tool window / goto): moves the caret and
+    /// hard-centers it in the view so the jump is always visible.
+    fn jump_to(&mut self, off: u64) {
+        self.set_cursor(off, false);
+        self.center_cursor = true;
+    }
+
+    /// Select `[start, start+len)` and center it in the view.
     fn select(&mut self, start: u64, len: u64) {
         let max = self.doc.len();
         let start = start.min(max);
         if len == 0 {
-            self.set_cursor(start, false);
+            self.jump_to(start);
             return;
         }
         self.sel_anchor = Some(start);
         self.cursor = (start + len - 1).min(max.saturating_sub(1));
         self.nibble = 0;
         self.scroll_to_cursor = true;
+        self.center_cursor = true;
     }
 
     fn move_by(&mut self, delta: i64, extend: bool) {

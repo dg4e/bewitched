@@ -473,18 +473,24 @@ impl App {
         self.page_rows = ((viewport_h / row_h) as usize).max(1);
         let scroll_to = self.scroll_to_cursor;
         self.scroll_to_cursor = false;
+        let center = self.center_cursor;
+        self.center_cursor = false;
         let cursor_row = vm.offset_to_row(self.cursor).unwrap_or(0);
 
-        // `show_rows` only renders visible rows, so `scroll_to_me` can't reach an
-        // off-screen target. When a jump is requested and the cursor row isn't in
-        // the previously-visible range, force the scroll offset to reveal it.
+        // `show_rows` only renders visible rows, so a widget `scroll_to_me` can't
+        // reach an off-screen target — we set the scroll offset ourselves.
         let (first, last) = self.last_row_range;
         let mut force_offset: Option<f32> = None;
-        if scroll_to && (last == 0 || cursor_row < first || cursor_row >= last) {
+        if center {
+            // Hard-center the cursor row (a jump from a tool window / goto), so
+            // the jump is always visible even if the row was already on-screen.
+            force_offset = Some((cursor_row as f32 * row_h - viewport_h * 0.5 + row_h * 0.5).max(0.0));
+        } else if scroll_to && (last == 0 || cursor_row < first || cursor_row >= last) {
+            // Gentle reveal for keyboard navigation: bring the row just into view.
             let target = if last == 0 || cursor_row < first {
-                cursor_row as f32 * row_h // bring to the top
+                cursor_row as f32 * row_h
             } else {
-                ((cursor_row + 1) as f32 * row_h - viewport_h).max(0.0) // to the bottom
+                ((cursor_row + 1) as f32 * row_h - viewport_h).max(0.0)
             };
             force_offset = Some(target.max(0.0));
         }
@@ -729,7 +735,7 @@ impl App {
                     self.bookmarks[n] = Some(self.cursor);
                     self.status = format!("bookmark {n} set at {:#X}", self.cursor);
                 } else if let Some(addr) = self.bookmarks[n] {
-                    self.set_cursor(addr, false);
+                    self.jump_to(addr);
                     self.status = format!("jumped to bookmark {n}");
                 }
                 return;
@@ -1014,7 +1020,7 @@ impl App {
                 if go {
                     match parse_addr(&self.goto.text) {
                         Some(a) => {
-                            self.set_cursor(a.min(self.doc.len()), false);
+                            self.jump_to(a.min(self.doc.len()));
                             self.goto.status = format!("at {:#X}", a);
                         }
                         None => self.goto.status = "invalid address".into(),
@@ -1151,7 +1157,7 @@ impl App {
                     let (off, len) = self.scope(self.stats.whole_file);
                     if let Some(frac) = draw_entropy_map(ui, &self.stats.emap) {
                         let target = off + (frac as f64 * len as f64) as u64;
-                        self.set_cursor(target.min(self.doc.len()), false);
+                        self.jump_to(target.min(self.doc.len()));
                     }
                 }
                 ui.separator();
@@ -1755,7 +1761,7 @@ impl App {
                 }
             });
         if let Some(off) = jump {
-            self.set_cursor(off, false);
+            self.jump_to(off);
         }
         self.scan.open = open;
     }
@@ -1820,7 +1826,7 @@ impl App {
             // jump to the pointer's document offset (addr - base)
             let base = self.ptrscan.base.trim().trim_start_matches("0x");
             let base = u64::from_str_radix(base, 16).ok().or_else(|| self.ptrscan.base.trim().parse().ok()).unwrap_or(0);
-            self.set_cursor(addr.saturating_sub(base).min(self.doc.len()), false);
+            self.jump_to(addr.saturating_sub(base).min(self.doc.len()));
         }
         self.ptrscan.open = open;
     }
@@ -1870,7 +1876,7 @@ impl App {
                 );
             });
         if let Some(off) = jump {
-            self.set_cursor(off, false);
+            self.jump_to(off);
         }
         self.signatures.open = open;
     }
@@ -1922,7 +1928,7 @@ impl App {
             self.build_byteplot(ctx);
         }
         if let Some(off) = jump {
-            self.set_cursor(off, false);
+            self.jump_to(off);
         }
         self.byteplot.open = open;
     }
@@ -1973,7 +1979,7 @@ impl App {
                 ui.label(egui::RichText::new("click an offset to jump there").small().color(theme::GREEN_DIM));
             });
         if let Some(off) = jump {
-            self.set_cursor(off, false);
+            self.jump_to(off);
         }
         self.diff.open = open;
     }
@@ -2024,7 +2030,7 @@ impl App {
                 }
             });
         if let Some(off) = jump {
-            self.set_cursor(off, false);
+            self.jump_to(off);
         }
         self.disasm.open = open;
     }
@@ -2078,7 +2084,7 @@ impl App {
                 });
             });
         if let Some(off) = jump {
-            self.set_cursor(off.min(self.doc.len()), false);
+            self.jump_to(off.min(self.doc.len()));
         }
         self.kstruct.open = open;
     }
@@ -2189,7 +2195,7 @@ impl App {
                 }
             });
         if let Some(off) = jump {
-            self.set_cursor(off, false);
+            self.jump_to(off);
         }
         self.template.open = open;
     }
@@ -2452,7 +2458,7 @@ impl App {
             self.notes.remove(i);
         }
         if let Some(off) = jump {
-            self.set_cursor(off, false);
+            self.jump_to(off);
         }
         self.notes_open = open;
     }
