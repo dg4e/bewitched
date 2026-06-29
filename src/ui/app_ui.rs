@@ -4,19 +4,15 @@
 /// egui's `command` modifier (⌘ on macOS, Ctrl elsewhere); this is just the label.
 #[cfg(target_os = "macos")]
 const MOD: &str = "⌘";
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 const MOD: &str = "^";
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-const MOD: &str = "Ctrl+";
 
-/// Redo shortcut label. macOS convention is ⇧⌘Z; elsewhere it's the Ctrl+Y
-/// idiom. Both bindings are accepted at runtime regardless of platform.
+/// Redo shortcut label. macOS convention is ⇧⌘Z; elsewhere it's the ^Y idiom.
+/// Both bindings are accepted at runtime regardless of platform.
 #[cfg(target_os = "macos")]
 const REDO_HINT: &str = "⇧⌘Z";
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 const REDO_HINT: &str = "^Y";
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-const REDO_HINT: &str = "Ctrl+Y";
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
