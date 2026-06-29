@@ -1,5 +1,14 @@
 // UI rendering for `App` (textually included from app.rs, shares its scope).
 
+/// Modifier-key prefix shown in menu shortcut hints. The binding itself uses
+/// egui's `command` modifier (⌘ on macOS, Ctrl elsewhere); this is just the label.
+#[cfg(target_os = "macos")]
+const MOD: &str = "⌘";
+#[cfg(target_os = "windows")]
+const MOD: &str = "^";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const MOD: &str = "Ctrl+";
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_bg(ctx);
@@ -60,7 +69,7 @@ impl App {
                     self.new_doc();
                     ui.close_menu();
                 }
-                if ui.button("open file…   Ctrl+O").on_hover_text("open a file or device — memory-mapped, so even huge files open instantly").clicked() {
+                if ui.button(format!("open file…   {MOD}O")).on_hover_text("open a file or device — memory-mapped, so even huge files open instantly").clicked() {
                     self.open_dialog();
                     ui.close_menu();
                 }
@@ -89,7 +98,7 @@ impl App {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("save   Ctrl+S").on_hover_text("save to the current file (atomic temp-then-rename)").clicked() {
+                if ui.button(format!("save   {MOD}S")).on_hover_text("save to the current file (atomic temp-then-rename)").clicked() {
                     self.save();
                     ui.close_menu();
                 }
@@ -135,26 +144,26 @@ impl App {
             });
 
             ui.menu_button("edit", |ui| {
-                if ui.add_enabled(self.doc.can_undo(), egui::Button::new("undo   Ctrl+Z")).on_hover_text("undo the last edit (unlimited history)").clicked() {
+                if ui.add_enabled(self.doc.can_undo(), egui::Button::new(format!("undo   {MOD}Z"))).on_hover_text("undo the last edit (unlimited history)").clicked() {
                     self.doc.undo();
                     self.scroll_to_cursor = true;
                     ui.close_menu();
                 }
-                if ui.add_enabled(self.doc.can_redo(), egui::Button::new("redo   Ctrl+Y")).on_hover_text("redo the last undone edit").clicked() {
+                if ui.add_enabled(self.doc.can_redo(), egui::Button::new(format!("redo   {MOD}Y"))).on_hover_text("redo the last undone edit").clicked() {
                     self.doc.redo();
                     self.scroll_to_cursor = true;
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("cut   Ctrl+X").on_hover_text("copy the selection (as hex) to the clipboard, then delete it").clicked() {
+                if ui.button(format!("cut   {MOD}X")).on_hover_text("copy the selection (as hex) to the clipboard, then delete it").clicked() {
                     self.cut(ui.ctx());
                     ui.close_menu();
                 }
-                if ui.button("copy   Ctrl+C").on_hover_text("copy the selection to the clipboard as space-separated hex").clicked() {
+                if ui.button(format!("copy   {MOD}C")).on_hover_text("copy the selection to the clipboard as space-separated hex").clicked() {
                     self.copy(ui.ctx());
                     ui.close_menu();
                 }
-                if ui.button("paste (insert)   Ctrl+V").on_hover_text("insert the clipboard bytes at the cursor, growing the file").clicked() {
+                if ui.button(format!("paste (insert)   {MOD}V")).on_hover_text("insert the clipboard bytes at the cursor, growing the file").clicked() {
                     self.paste(false);
                     ui.close_menu();
                 }
@@ -162,7 +171,7 @@ impl App {
                     self.paste(true);
                     ui.close_menu();
                 }
-                if ui.button("select all   Ctrl+a").on_hover_text("select the entire document").clicked() {
+                if ui.button(format!("select all   {MOD}A")).on_hover_text("select the entire document").clicked() {
                     self.sel_anchor = Some(0);
                     self.cursor = self.doc.len().saturating_sub(1);
                     ui.close_menu();
@@ -249,11 +258,11 @@ impl App {
             });
 
             ui.menu_button("search", |ui| {
-                if ui.button("find / replace…   Ctrl+F").on_hover_text("search for text, Unicode, hex (with ? wildcards), integers or floats; forward/backward; replace").clicked() {
+                if ui.button(format!("find / replace…   {MOD}F")).on_hover_text("search for text, Unicode, hex (with ? wildcards), integers or floats; forward/backward; replace").clicked() {
                     self.search.open = true;
                     ui.close_menu();
                 }
-                if ui.button("go to address…   Ctrl+G").on_hover_text("jump the cursor to an offset (decimal, or 0x… hex)").clicked() {
+                if ui.button(format!("go to address…   {MOD}G")).on_hover_text("jump the cursor to an offset (decimal, or 0x… hex)").clicked() {
                     self.goto.open = true;
                     ui.close_menu();
                 }
