@@ -469,14 +469,33 @@ impl App {
         let vm = self.view_map();
         let total_rows = vm.total_rows().max(1);
 
-        self.page_rows = ((ui.available_height() / row_h) as usize).max(1);
+        let viewport_h = ui.available_height();
+        self.page_rows = ((viewport_h / row_h) as usize).max(1);
         let scroll_to = self.scroll_to_cursor;
         self.scroll_to_cursor = false;
         let cursor_row = vm.offset_to_row(self.cursor).unwrap_or(0);
 
-        egui::ScrollArea::both()
-            .auto_shrink([false, false])
+        // `show_rows` only renders visible rows, so `scroll_to_me` can't reach an
+        // off-screen target. When a jump is requested and the cursor row isn't in
+        // the previously-visible range, force the scroll offset to reveal it.
+        let (first, last) = self.last_row_range;
+        let mut force_offset: Option<f32> = None;
+        if scroll_to && (last == 0 || cursor_row < first || cursor_row >= last) {
+            let target = if last == 0 || cursor_row < first {
+                cursor_row as f32 * row_h // bring to the top
+            } else {
+                ((cursor_row + 1) as f32 * row_h - viewport_h).max(0.0) // to the bottom
+            };
+            force_offset = Some(target.max(0.0));
+        }
+
+        let mut scroll_area = egui::ScrollArea::both().auto_shrink([false, false]);
+        if let Some(off) = force_offset {
+            scroll_area = scroll_area.vertical_scroll_offset(off);
+        }
+        scroll_area
             .show_rows(ui, row_h, total_rows, |ui, range| {
+                self.last_row_range = (range.start, range.end);
                 let range_start = range.start;
                 // Geometry of the first rendered row, used to map an absolute
                 // pointer position to a byte — so a click-drag tracks across rows
@@ -523,9 +542,6 @@ impl App {
                             if grid_top.is_none() {
                                 grid_top = Some(resp.rect.top());
                                 grid_left = Some(resp.rect.left());
-                            }
-                            if scroll_to && r == cursor_row {
-                                resp.scroll_to_me(Some(egui::Align::Center));
                             }
                             if self.bg.is_none() {
                                 if resp.drag_started() {
@@ -1544,17 +1560,21 @@ impl App {
 
     fn strings_window(&mut self, ctx: &egui::Context) {
         let mut open = self.strings.open;
-        let mut jump: Option<u64> = None;
+        let mut jump: Option<(u64, u64)> = None;
         egui::Window::new("Extract strings")
             .open(&mut open)
             .resizable(true)
             .default_width(520.0)
+            .max_width(620.0)
             .show(ctx, |ui| {
+                // Cap the content width so long, unbreakable result strings can't
+                // push the window (and its close button) off-screen.
+                ui.set_max_width(600.0);
                 ui.horizontal(|ui| {
                     ui.label("Min length:");
                     ui.add(egui::TextEdit::singleline(&mut self.strings.min_len).desired_width(48.0));
                     ui.checkbox(&mut self.strings.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
-                    if ui.button("Scan").clicked() {
+                    if ui.button("Scan").on_hover_text("Find printable strings in the file/selection").clicked() {
                         self.do_strings();
                     }
                 });
@@ -1563,36 +1583,45 @@ impl App {
                     egui::RichText::new(format!("{} result(s)", self.strings.results.len()))
                         .color(theme::GREEN_DIM),
                 );
-                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                egui::ScrollArea::both().max_height(360.0).auto_shrink([false, false]).show(ui, |ui| {
                     egui::Grid::new("strings_grid")
                         .num_columns(3)
                         .striped(true)
                         .show(ui, |ui| {
                             for f in &self.strings.results {
+                                let bytes = match f.kind {
+                                    crate::ops::strings::Kind::Ascii => f.text.len() as u64,
+                                    crate::ops::strings::Kind::Utf16 => (f.text.chars().count() * 2) as u64,
+                                };
                                 if ui
                                     .add(egui::Label::new(
                                         egui::RichText::new(format!("{:#010X}", f.offset))
                                             .color(theme::ADDR),
                                     )
                                     .sense(egui::Sense::click()))
+                                    .on_hover_text("Jump to and select this string")
                                     .clicked()
                                 {
-                                    jump = Some(f.offset);
+                                    jump = Some((f.offset, bytes));
                                 }
                                 let kind = match f.kind {
                                     crate::ops::strings::Kind::Ascii => "A",
                                     crate::ops::strings::Kind::Utf16 => "U",
                                 };
                                 ui.label(egui::RichText::new(kind).color(theme::GREEN_DIM));
-                                ui.label(egui::RichText::new(&f.text).monospace());
+                                ui.add(
+                                    egui::Label::new(egui::RichText::new(&f.text).monospace())
+                                        .truncate(),
+                                )
+                                .on_hover_text(&f.text);
                                 ui.end_row();
                             }
                         });
                 });
-                ui.label(egui::RichText::new("click an offset to jump there").small().color(theme::GREEN_DIM));
+                ui.label(egui::RichText::new("click an offset to jump to & select the string").small().color(theme::GREEN_DIM));
             });
-        if let Some(off) = jump {
-            self.set_cursor(off, false);
+        if let Some((off, len)) = jump {
+            self.select(off, len);
         }
         self.strings.open = open;
     }

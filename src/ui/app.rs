@@ -373,6 +373,9 @@ pub struct App {
     status: String,
     scroll_to_cursor: bool,
     page_rows: usize,
+    /// Visible visual-row range from the previous frame [first, last), so a
+    /// programmatic jump can tell whether the cursor is off-screen.
+    last_row_range: (usize, usize),
 
     bg: Option<BgTask>,
 
@@ -441,6 +444,7 @@ impl App {
             status,
             scroll_to_cursor: false,
             page_rows: 16,
+            last_row_range: (0, 0),
             bg: None,
             search: SearchState {
                 data_type: 0,
@@ -1403,6 +1407,20 @@ impl App {
             self.sel_anchor = None;
         }
         self.cursor = pos;
+        self.nibble = 0;
+        self.scroll_to_cursor = true;
+    }
+
+    /// Select `[start, start+len)` and scroll it into view.
+    fn select(&mut self, start: u64, len: u64) {
+        let max = self.doc.len();
+        let start = start.min(max);
+        if len == 0 {
+            self.set_cursor(start, false);
+            return;
+        }
+        self.sel_anchor = Some(start);
+        self.cursor = (start + len - 1).min(max.saturating_sub(1));
         self.nibble = 0;
         self.scroll_to_cursor = true;
     }
