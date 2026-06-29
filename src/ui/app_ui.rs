@@ -56,11 +56,11 @@ impl App {
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
         egui::menu::bar(ui, |ui| {
             ui.menu_button("File", |ui| {
-                if ui.button("New").clicked() {
+                if ui.button("New").on_hover_text("Start a new, empty document").clicked() {
                     self.new_doc();
                     ui.close_menu();
                 }
-                if ui.button("Open file…   Ctrl+O").clicked() {
+                if ui.button("Open file…   Ctrl+O").on_hover_text("Open a file or device — memory-mapped, so even huge files open instantly").clicked() {
                     self.open_dialog();
                     ui.close_menu();
                 }
@@ -68,7 +68,7 @@ impl App {
                     ui.label(egui::RichText::new("raw devices").color(theme::GREEN_DIM));
                     ui.separator();
                     for dev in raw_targets() {
-                        if ui.button(&dev.0).clicked() {
+                        if ui.button(&dev.0).on_hover_text("Open this device for raw read/write — requires elevated privileges").clicked() {
                             self.open_path(PathBuf::from(&dev.1));
                             ui.close_menu();
                         }
@@ -82,86 +82,87 @@ impl App {
                 });
                 if ui
                     .button("Open process memory…  (root/admin for other PIDs)")
+                    .on_hover_text("View/edit a running process's memory live. Your own PID needs no privileges; other processes require root / Administrator")
                     .clicked()
                 {
                     self.process_ui.open = true;
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Save   Ctrl+S").clicked() {
+                if ui.button("Save   Ctrl+S").on_hover_text("Save to the current file (atomic temp-then-rename)").clicked() {
                     self.save();
                     ui.close_menu();
                 }
-                if ui.button("Save as…").clicked() {
+                if ui.button("Save as…").on_hover_text("Save the document to a new file").clicked() {
                     self.save_as();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Print…   (opens hex dump in default viewer)").clicked() {
+                if ui.button("Print…   (opens hex dump in default viewer)").on_hover_text("Render a hex dump to HTML and open it in your default viewer/browser, which can print or save as PDF").clicked() {
                     self.print();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Create IPS patch…   (diff vs original)").clicked() {
+                if ui.button("Create IPS patch…   (diff vs original)").on_hover_text("Diff this document against an original file to make an IPS patch (classic format, ≤16 MiB)").clicked() {
                     self.create_ips();
                     ui.close_menu();
                 }
-                if ui.button("Apply IPS patch…").clicked() {
+                if ui.button("Apply IPS patch…").on_hover_text("Apply an IPS patch to the current document").clicked() {
                     self.apply_ips();
                     ui.close_menu();
                 }
-                if ui.button("Create BPS patch…   (diff vs original)").clicked() {
+                if ui.button("Create BPS patch…   (diff vs original)").on_hover_text("Diff against an original to make a BPS patch (any size, CRC-validated)").clicked() {
                     self.create_bps();
                     ui.close_menu();
                 }
-                if ui.button("Apply BPS patch…").clicked() {
+                if ui.button("Apply BPS patch…").on_hover_text("Apply a BPS patch (validates the source & target CRC-32)").clicked() {
                     self.apply_bps();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Save annotations (.bw)").clicked() {
+                if ui.button("Save annotations (.bw)").on_hover_text("Save bookmarks, regions and notes to <file>.bw alongside the document (auto-loaded on reopen)").clicked() {
                     self.save_annotations();
                     ui.close_menu();
                 }
-                if ui.button("Load annotations…").clicked() {
+                if ui.button("Load annotations…").on_hover_text("Load a .bw sidecar of bookmarks, regions and notes").clicked() {
                     self.load_annotations_dialog();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Quit").clicked() {
+                if ui.button("Quit").on_hover_text("Close bewitched").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
 
             ui.menu_button("Edit", |ui| {
-                if ui.add_enabled(self.doc.can_undo(), egui::Button::new("Undo   Ctrl+Z")).clicked() {
+                if ui.add_enabled(self.doc.can_undo(), egui::Button::new("Undo   Ctrl+Z")).on_hover_text("Undo the last edit (unlimited history)").clicked() {
                     self.doc.undo();
                     self.scroll_to_cursor = true;
                     ui.close_menu();
                 }
-                if ui.add_enabled(self.doc.can_redo(), egui::Button::new("Redo   Ctrl+Y")).clicked() {
+                if ui.add_enabled(self.doc.can_redo(), egui::Button::new("Redo   Ctrl+Y")).on_hover_text("Redo the last undone edit").clicked() {
                     self.doc.redo();
                     self.scroll_to_cursor = true;
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Cut   Ctrl+X").clicked() {
+                if ui.button("Cut   Ctrl+X").on_hover_text("Copy the selection (as hex) to the clipboard, then delete it").clicked() {
                     self.cut(ui.ctx());
                     ui.close_menu();
                 }
-                if ui.button("Copy   Ctrl+C").clicked() {
+                if ui.button("Copy   Ctrl+C").on_hover_text("Copy the selection to the clipboard as space-separated hex").clicked() {
                     self.copy(ui.ctx());
                     ui.close_menu();
                 }
-                if ui.button("Paste (insert)   Ctrl+V").clicked() {
+                if ui.button("Paste (insert)   Ctrl+V").on_hover_text("Insert the clipboard bytes at the cursor, growing the file").clicked() {
                     self.paste(false);
                     ui.close_menu();
                 }
-                if ui.button("Paste (overwrite)").clicked() {
+                if ui.button("Paste (overwrite)").on_hover_text("Overwrite bytes at the cursor with the clipboard, keeping the length").clicked() {
                     self.paste(true);
                     ui.close_menu();
                 }
-                if ui.button("Select all   Ctrl+A").clicked() {
+                if ui.button("Select all   Ctrl+A").on_hover_text("Select the entire document").clicked() {
                     self.sel_anchor = Some(0);
                     self.cursor = self.doc.len().saturating_sub(1);
                     ui.close_menu();
@@ -172,6 +173,7 @@ impl App {
                             self.selection_range().is_some(),
                             egui::Button::new("Poke selection → process"),
                         )
+                        .on_hover_text("Write the selected bytes straight into the live process's memory")
                         .clicked()
                 {
                     self.poke_selection_to_process();
@@ -182,180 +184,182 @@ impl App {
                     EditMode::Overwrite => "Mode: OVERWRITE  (Ins)",
                     EditMode::Insert => "Mode: INSERT  (Ins)",
                 };
-                if ui.button(mode_label).clicked() {
+                if ui.button(mode_label).on_hover_text("Toggle typing mode (Insert key). OVERWRITE replaces bytes (keeps length); INSERT adds bytes (grows the file)").clicked() {
                     self.toggle_mode();
                     ui.close_menu();
                 }
             });
 
             ui.menu_button("View", |ui| {
-                ui.label("Character set");
+                ui.label("Character set").on_hover_text("How the text column decodes bytes to glyphs");
                 for cs in Charset::ALL {
-                    if ui.radio(self.charset == *cs, cs.name()).clicked() {
+                    if ui.radio(self.charset == *cs, cs.name()).on_hover_text("Decode the text column with this character set").clicked() {
                         self.charset = *cs;
                     }
                 }
                 ui.separator();
-                ui.label("Byte grouping");
+                ui.label("Byte grouping").on_hover_text("How many bytes are packed together (no space) per hex column");
                 for g in [1usize, 2, 4, 8, 16] {
-                    if ui.radio(self.group == g, format!("{g} byte(s)")).clicked() {
+                    if ui.radio(self.group == g, format!("{g} byte(s)")).on_hover_text("Group this many bytes per hex column").clicked() {
                         self.group = g;
                     }
                 }
                 ui.separator();
-                ui.label("Columns (bytes/row)");
+                ui.label("Columns (bytes/row)").on_hover_text("How many bytes are shown per row");
                 for c in [8usize, 16, 24, 32] {
-                    if ui.radio(self.bytes_per_row == c, format!("{c}")).clicked() {
+                    if ui.radio(self.bytes_per_row == c, format!("{c}")).on_hover_text("Show this many bytes per row").clicked() {
                         self.bytes_per_row = c;
                     }
                 }
                 ui.separator();
-                if ui.radio(self.view_mode == ViewMode::Both, "Hex + text").clicked() {
+                if ui.radio(self.view_mode == ViewMode::Both, "Hex + text").on_hover_text("Show both the hex and text columns").clicked() {
                     self.view_mode = ViewMode::Both;
                 }
-                if ui.radio(self.view_mode == ViewMode::HexOnly, "Hex only").clicked() {
+                if ui.radio(self.view_mode == ViewMode::HexOnly, "Hex only").on_hover_text("Show only the hex column").clicked() {
                     self.view_mode = ViewMode::HexOnly;
                 }
-                if ui.radio(self.view_mode == ViewMode::TextOnly, "Text only").clicked() {
+                if ui.radio(self.view_mode == ViewMode::TextOnly, "Text only").on_hover_text("Show only the text column").clicked() {
                     self.view_mode = ViewMode::TextOnly;
                 }
                 ui.separator();
-                ui.checkbox(&mut self.inspector_open, "Data inspector panel");
+                ui.checkbox(&mut self.inspector_open, "Data inspector panel")
+                    .on_hover_text("Toggle the side panel that decodes the bytes at the cursor as int/float/date/GUID/…");
                 ui.separator();
-                ui.label("Data-folds / regions");
-                if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("Fold selection")).clicked() {
+                ui.label("Data-folds / regions").on_hover_text("Collapse spans of the document into single marker rows");
+                if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("Fold selection")).on_hover_text("Collapse the selected range into a foldable region").clicked() {
                     self.fold_selection(true);
                     ui.close_menu();
                 }
-                if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("Fold selection (inaccessible)")).clicked() {
+                if ui.add_enabled(self.selection_range().is_some(), egui::Button::new("Fold selection (inaccessible)")).on_hover_text("Mark the selection inaccessible (hidden by default), e.g. unreadable memory").clicked() {
                     self.fold_selection(false);
                     ui.close_menu();
                 }
-                if ui.add_enabled(!self.regions.is_empty(), egui::Button::new("Unfold all")).clicked() {
+                if ui.add_enabled(!self.regions.is_empty(), egui::Button::new("Unfold all")).on_hover_text("Expand every folded region").clicked() {
                     self.unfold_all();
                     ui.close_menu();
                 }
-                if ui.button("Regions…").clicked() {
+                if ui.button("Regions…").on_hover_text("Manage all regions: rename, fold/unfold, accessibility, delete").clicked() {
                     self.regions_open = true;
                     ui.close_menu();
                 }
-                if ui.button("Notes / annotations…").clicked() {
+                if ui.button("Notes / annotations…").on_hover_text("Add and browse free-text notes anchored to offsets/selections").clicked() {
                     self.notes_open = true;
                     ui.close_menu();
                 }
             });
 
             ui.menu_button("Search", |ui| {
-                if ui.button("Find / Replace…   Ctrl+F").clicked() {
+                if ui.button("Find / Replace…   Ctrl+F").on_hover_text("Search for text, Unicode, hex (with ? wildcards), integers or floats; forward/backward; replace").clicked() {
                     self.search.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Go to address…   Ctrl+G").clicked() {
+                if ui.button("Go to address…   Ctrl+G").on_hover_text("Jump the cursor to an offset (decimal, or 0x… hex)").clicked() {
                     self.goto.open = true;
                     ui.close_menu();
                 }
             });
 
             ui.menu_button("Tools", |ui| {
-                if ui.button("Checksums / digests…").clicked() {
+                if ui.button("Checksums / digests…").on_hover_text("Compute Checksum/CRC/Adler/MD5/SHA digests, or a custom CRC, over the file or selection").clicked() {
                     self.checksum.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Statistics / analysis…").clicked() {
+                if ui.button("Statistics / analysis…").on_hover_text("Byte distribution, Shannon entropy, a data-type guess, and an entropy map").clicked() {
                     self.stats.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Export…").clicked() {
+                if ui.button("Export…").on_hover_text("Export bytes as source code (C, Rust, Python, …), text (hex dump, HTML, Base64, …) or hex files (Intel HEX, S-record)").clicked() {
                     self.export.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Insert byte pattern…").clicked() {
+                if ui.button("Insert byte pattern…").on_hover_text("Insert, overwrite or fill with a repeating hex pattern").clicked() {
                     self.pattern.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Transform selection…").clicked() {
+                if ui.button("Transform selection…").on_hover_text("Apply XOR/AND/OR/ADD/NOT, rotate, shift, reverse, byte-swap or case-flip to the selection").clicked() {
                     self.transform.open = true;
                     ui.close_menu();
                 }
                 ui.menu_button("Compression", |ui| {
-                    if ui.button("Decompress (auto-detect)").clicked() {
+                    if ui.button("Decompress (auto-detect)").on_hover_text("Decompress the selection (or whole doc), auto-detecting gzip/zlib").clicked() {
                         self.do_decompress();
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Compress — zlib").clicked() {
+                    if ui.button("Compress — zlib").on_hover_text("Compress the selection (or whole doc) as zlib").clicked() {
                         self.do_compress(compress::Codec::Zlib);
                         ui.close_menu();
                     }
-                    if ui.button("Compress — gzip").clicked() {
+                    if ui.button("Compress — gzip").on_hover_text("Compress the selection (or whole doc) as gzip").clicked() {
                         self.do_compress(compress::Codec::Gzip);
                         ui.close_menu();
                     }
-                    if ui.button("Compress — raw deflate").clicked() {
+                    if ui.button("Compress — raw deflate").on_hover_text("Compress the selection (or whole doc) as raw DEFLATE").clicked() {
                         self.do_compress(compress::Codec::Deflate);
                         ui.close_menu();
                     }
                 });
-                if ui.button("Extract strings…").clicked() {
+                if ui.button("Extract strings…").on_hover_text("Find printable ASCII and UTF-16 strings; click a result to jump").clicked() {
                     self.strings.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Value scanner (memory/save editing)…").clicked() {
+                if ui.button("Value scanner (memory/save editing)…").on_hover_text("Cheat-Engine workflow: scan for a value, then narrow as it changes; write or freeze matches").clicked() {
                     self.scan.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Pointer scan…").clicked() {
+                if ui.button("Pointer scan…").on_hover_text("Find 64-bit pointers that reference a target address").clicked() {
                     self.ptrscan.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Find signatures (binwalk)…").clicked() {
+                if ui.button("Find signatures (binwalk)…").on_hover_text("Locate embedded file formats, archives, executables and crypto constants by magic bytes").clicked() {
                     self.signatures.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Byte map (visualize)…").clicked() {
+                if ui.button("Byte map (visualize)…").on_hover_text("Render the file as a colored image (one pixel per byte) to spot structure; click to jump").clicked() {
                     self.byteplot.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Compare / diff (detailed)…").clicked() {
+                if ui.button("Compare / diff (detailed)…").on_hover_text("Byte-diff against another file and list every differing range").clicked() {
                     self.diff.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Disassembly (x86/x64)…").clicked() {
+                if ui.button("Disassembly (x86/x64)…").on_hover_text("Disassemble at the cursor — x86/ARM/MIPS/PowerPC/RISC-V/MSP430/6502/SM83").clicked() {
                     self.disasm.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Binary template (structure view)…").clicked() {
+                if ui.button("Binary template (structure view)…").on_hover_text("Parse the file into named, typed, editable fields with a flat template").clicked() {
                     self.template.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Struct parser (nested tree)…").clicked() {
+                if ui.button("Struct parser (nested tree)…").on_hover_text("Parse into a nested tree (sub-types, repeat, if, enums, expressions) — Kaitai-inspired").clicked() {
                     self.kstruct.open = true;
                     ui.close_menu();
                 }
-                if ui.button("Script (Rhai)…").clicked() {
+                if ui.button("Script (Rhai)…").on_hover_text("Run a sandboxed Rhai script over the selection/whole file (read/write bytes, search, CRC, …)").clicked() {
                     self.script.open = true;
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("File tools (shred / split / concat / compare)…").clicked() {
+                if ui.button("File tools (shred / split / concat / compare)…").on_hover_text("Securely shred a file, split it into parts, concatenate files, or compare two").clicked() {
                     self.tools.open = true;
                     ui.close_menu();
                 }
             });
 
             ui.menu_button("Help", |ui| {
-                if ui.button("About bewitched").clicked() {
+                if ui.button("About bewitched").on_hover_text("Version and credits").clicked() {
                     self.about_open = true;
                     ui.close_menu();
                 }
-                if ui.button("Find updates…").clicked() {
+                if ui.button("Find updates…").on_hover_text("Check for a newer version").clicked() {
                     self.status = "bewitched 0.1.0 — you are running the latest local build".into();
                     ui.close_menu();
                 }
             });
 
             ui.separator();
-            ui.label(egui::RichText::new("bewitched").color(theme::GREEN).strong());
+            ui.label(egui::RichText::new("bewitched").color(theme::GREEN).strong())
+                .on_hover_text("bewitched — a fast, cross-platform hex editor & binary-analysis toolkit");
         });
     }
 
@@ -368,29 +372,45 @@ impl App {
             ui.label(
                 egui::RichText::new(format!("{}{}", modi, self.doc.label()))
                     .color(theme::AMBER),
-            );
+            )
+            .on_hover_text(if self.doc.is_modified() {
+                "Current document — '*' means there are unsaved changes"
+            } else {
+                "Current document (no unsaved changes)"
+            });
             ui.separator();
-            ui.label(format!("offset {:#X} ({})", self.cursor, self.cursor));
+            ui.label(format!("offset {:#X} ({})", self.cursor, self.cursor))
+                .on_hover_text("Cursor position — hex (and decimal). Use Search ▸ Go to address to jump");
             ui.separator();
             if self.cursor < self.doc.len() {
                 let b = self.byte_at(self.cursor);
-                ui.label(format!("byte {:02X} = {:3} = {:#010b}", b, b, b));
+                ui.label(format!("byte {:02X} = {:3} = {:#010b}", b, b, b))
+                    .on_hover_text("The byte under the cursor: hex = decimal = binary");
             }
             if let Some((s, e)) = self.selection_range() {
                 ui.separator();
                 ui.label(
                     egui::RichText::new(format!("sel {:#X}..{:#X} ({} bytes)", s, e, e - s))
                         .color(theme::AMBER),
-                );
+                )
+                .on_hover_text("Current selection: start..end (exclusive) and length");
             }
             ui.separator();
-            ui.label(human(self.doc.len()));
+            ui.label(human(self.doc.len()))
+                .on_hover_text("Total document size");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mode = match self.mode {
-                    EditMode::Overwrite => "OVR",
-                    EditMode::Insert => "INS",
+                let (mode, mode_tip) = match self.mode {
+                    EditMode::Overwrite => (
+                        "OVR",
+                        "OVERWRITE mode: typing replaces the byte under the cursor (length unchanged). Press Insert to switch to INS",
+                    ),
+                    EditMode::Insert => (
+                        "INS",
+                        "INSERT mode: typing adds bytes at the cursor, growing the file. Press Insert to switch to OVR",
+                    ),
                 };
-                ui.label(egui::RichText::new(mode).color(theme::GREEN).strong());
+                ui.label(egui::RichText::new(mode).color(theme::GREEN).strong())
+                    .on_hover_text(mode_tip);
                 ui.separator();
                 if self.process_target.is_some() {
                     ui.label(
@@ -758,26 +778,28 @@ impl App {
                     ui.text_edit_singleline(&mut self.search.replace);
                 });
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.search.case_insensitive, "Ignore case");
-                    ui.checkbox(&mut self.search.big_endian, "Big-endian");
+                    ui.checkbox(&mut self.search.case_insensitive, "Ignore case")
+                        .on_hover_text("Case-insensitive match (text searches)");
+                    ui.checkbox(&mut self.search.big_endian, "Big-endian")
+                        .on_hover_text("Interpret integer/float needles as big-endian (most-significant byte first)");
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("◀ Find prev").clicked() {
+                    if ui.button("◀ Find prev").on_hover_text("Search backward from the cursor").clicked() {
                         self.do_find(search::Direction::Backward);
                     }
-                    if ui.button("Find next ▶").clicked() {
+                    if ui.button("Find next ▶").on_hover_text("Search forward from the cursor").clicked() {
                         self.do_find(search::Direction::Forward);
                     }
-                    if ui.button("Find first").clicked() {
+                    if ui.button("Find first").on_hover_text("Search from the start of the document").clicked() {
                         self.do_find(search::Direction::All);
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Replace & find").clicked() {
+                    if ui.button("Replace & find").on_hover_text("Replace the current match, then find the next one").clicked() {
                         self.do_replace_one();
                     }
-                    if ui.button("Replace all").clicked() {
+                    if ui.button("Replace all").on_hover_text("Replace every occurrence in the document").clicked() {
                         self.do_replace_all();
                     }
                 });
@@ -941,7 +963,7 @@ impl App {
             .open(&mut open)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.checkbox(&mut self.checksum.whole_file, "Whole file (else selection)");
+                ui.checkbox(&mut self.checksum.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
                 ui.separator();
                 egui::Grid::new("algos").num_columns(2).show(ui, |ui| {
                     for (i, a) in checksum::Algo::ALL.iter().enumerate() {
@@ -1037,7 +1059,7 @@ impl App {
             .resizable(true)
             .default_width(560.0)
             .show(ctx, |ui| {
-                ui.checkbox(&mut self.stats.whole_file, "Whole file (else selection)");
+                ui.checkbox(&mut self.stats.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
                 ui.horizontal(|ui| {
                     if ui.button("Analyze").clicked() {
                         let (off, len) = self.scope(self.stats.whole_file);
@@ -1094,7 +1116,7 @@ impl App {
                             ui.selectable_value(&mut self.export.fmt, i, f.name());
                         }
                     });
-                ui.checkbox(&mut self.export.whole_file, "Whole file (else selection)");
+                ui.checkbox(&mut self.export.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
                 ui.horizontal(|ui| {
                     if ui.button("Preview").clicked() {
                         self.export.preview = self.gen_export();
@@ -1144,11 +1166,14 @@ impl App {
                     ui.label("Length (bytes):");
                     ui.text_edit_singleline(&mut self.pattern.count);
                 });
-                ui.radio_value(&mut self.pattern.mode, 0, "Insert at cursor");
-                ui.radio_value(&mut self.pattern.mode, 1, "Overwrite at cursor");
-                ui.radio_value(&mut self.pattern.mode, 2, "Fill selection");
+                ui.radio_value(&mut self.pattern.mode, 0, "Insert at cursor")
+                    .on_hover_text("Insert the pattern at the cursor, growing the file");
+                ui.radio_value(&mut self.pattern.mode, 1, "Overwrite at cursor")
+                    .on_hover_text("Overwrite bytes at the cursor with the pattern");
+                ui.radio_value(&mut self.pattern.mode, 2, "Fill selection")
+                    .on_hover_text("Fill the current selection by repeating the pattern");
                 ui.separator();
-                if ui.button("Apply").clicked() {
+                if ui.button("Apply").on_hover_text("Write the byte pattern as configured above").clicked() {
                     self.apply_pattern();
                 }
             });
@@ -1369,19 +1394,23 @@ impl App {
             .frame(egui::Frame::none().fill(theme::PANEL).inner_margin(8.0))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("DATA INSPECTOR").color(theme::GREEN).strong());
-                    if ui.small_button("✕").clicked() {
+                    ui.label(egui::RichText::new("DATA INSPECTOR").color(theme::GREEN).strong())
+                        .on_hover_text("Decodes the 16 bytes at the cursor as many data types at once");
+                    if ui.small_button("✕").on_hover_text("Close the inspector (also in the View menu)").clicked() {
                         open = false;
                     }
                 });
                 ui.horizontal(|ui| {
                     ui.label("byte order:");
-                    ui.selectable_value(&mut self.inspector_le, true, "LE");
-                    ui.selectable_value(&mut self.inspector_le, false, "BE");
+                    ui.selectable_value(&mut self.inspector_le, true, "LE")
+                        .on_hover_text("Little-endian: least-significant byte first (x86, ARM, …)");
+                    ui.selectable_value(&mut self.inspector_le, false, "BE")
+                        .on_hover_text("Big-endian: most-significant byte first (network order, some RISC)");
                 });
                 ui.label(
                     egui::RichText::new(format!("@ {:#X}", self.cursor)).color(theme::ADDR),
-                );
+                )
+                .on_hover_text("The offset being decoded (the cursor position)");
                 ui.separator();
                 let window = self.doc.read_range(self.cursor, 16);
                 let interps = inspect::inspect(&window, self.inspector_le);
@@ -1450,6 +1479,7 @@ impl App {
                 ui.separator();
                 if ui
                     .add_enabled(self.selection_range().is_some(), egui::Button::new("Apply"))
+                    .on_hover_text("Apply the chosen transform to the selected bytes (undoable)")
                     .clicked()
                 {
                     self.apply_transform();
@@ -1469,7 +1499,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("Min length:");
                     ui.add(egui::TextEdit::singleline(&mut self.strings.min_len).desired_width(48.0));
-                    ui.checkbox(&mut self.strings.whole_file, "Whole file (else selection)");
+                    ui.checkbox(&mut self.strings.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
                     if ui.button("Scan").clicked() {
                         self.do_strings();
                     }
@@ -1546,26 +1576,26 @@ impl App {
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    if ui.button("First scan").clicked() {
+                    if ui.button("First scan").on_hover_text("Find every address currently equal to the value above").clicked() {
                         self.do_first_scan();
                     }
-                    if ui.button("Next: equal").clicked() {
+                    if ui.button("Next: equal").on_hover_text("Keep only matches still equal to the value above").clicked() {
                         if let Ok(n) = self.scan_needle() {
                             self.do_refine(scan::Refine::Eq(n));
                         }
                     }
-                    if ui.button("Changed").clicked() {
+                    if ui.button("Changed").on_hover_text("Keep only matches whose value changed since the last scan").clicked() {
                         self.do_refine(scan::Refine::Changed);
                     }
-                    if ui.button("Unchanged").clicked() {
+                    if ui.button("Unchanged").on_hover_text("Keep only matches whose value stayed the same").clicked() {
                         self.do_refine(scan::Refine::Unchanged);
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("Increased").clicked() {
+                    if ui.button("Increased").on_hover_text("Keep only matches whose value went up since the last scan").clicked() {
                         self.do_refine(scan::Refine::Increased);
                     }
-                    if ui.button("Decreased").clicked() {
+                    if ui.button("Decreased").on_hover_text("Keep only matches whose value went down since the last scan").clicked() {
                         self.do_refine(scan::Refine::Decreased);
                     }
                     if ui
@@ -1573,11 +1603,12 @@ impl App {
                             !self.scan.matches.is_empty(),
                             egui::Button::new("Write value → all"),
                         )
+                        .on_hover_text("Write the value above into every matched address (pokes the live process if one is open)")
                         .clicked()
                     {
                         self.poke_value();
                     }
-                    if ui.button("Clear").clicked() {
+                    if ui.button("Clear").on_hover_text("Discard the current match list").clicked() {
                         self.scan.matches.clear();
                         self.scan.status.clear();
                     }
@@ -1598,7 +1629,7 @@ impl App {
                             egui::RichText::new(format!("❄ {} frozen", self.frozen.len()))
                                 .color(theme::RED),
                         );
-                        if ui.button("Unfreeze all").clicked() {
+                        if ui.button("Unfreeze all").on_hover_text("Stop pinning frozen values").clicked() {
                             self.unfreeze_all();
                         }
                     }
@@ -1873,9 +1904,10 @@ impl App {
             .default_width(460.0)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Arch:");
+                    ui.label("Arch:").on_hover_text("Instruction set to decode the bytes at the cursor as");
                     for a in disasm::Arch::ALL {
-                        ui.selectable_value(&mut self.disasm.arch, *a, a.label());
+                        ui.selectable_value(&mut self.disasm.arch, *a, a.label())
+                            .on_hover_text("Disassemble using this architecture");
                     }
                 });
                 ui.label(
@@ -1933,7 +1965,7 @@ impl App {
                                 }
                             }
                         });
-                    if ui.button("Parse at cursor").clicked() {
+                    if ui.button("Parse at cursor").on_hover_text("Parse the document from the cursor with the schema above, into a tree").clicked() {
                         self.apply_kstruct();
                     }
                 });
@@ -1989,7 +2021,7 @@ impl App {
                                 }
                             }
                         });
-                    if ui.button("Apply at cursor").clicked() {
+                    if ui.button("Apply at cursor").on_hover_text("Parse fields from the cursor with the template above").clicked() {
                         self.apply_template();
                     }
                 });
@@ -2091,7 +2123,7 @@ impl App {
                     if ui.button("Run").clicked() {
                         self.run_script();
                     }
-                    ui.checkbox(&mut self.script.whole_file, "Whole file (else selection)");
+                    ui.checkbox(&mut self.script.whole_file, "Whole file (else selection)").on_hover_text("Operate on the whole document; uncheck to use the current selection");
                     egui::ComboBox::from_label("Load")
                         .selected_text("library / saved")
                         .show_ui(ui, |ui| {
