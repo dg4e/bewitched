@@ -172,7 +172,9 @@ pub fn build_row(layout: &Layout, ctx: &RowCtx) -> LayoutJob {
                     let base = byte_color(b, modi);
                     let hi = HEXD[(b >> 4) as usize] as char;
                     let lo = HEXD[(b & 0xf) as usize] as char;
-                    let cur = ctx.cursor.filter(|c| c.0 == i && c.2 == Pane::Hex);
+                    // Match the cursor by byte index (not pane) so the byte is
+                    // highlighted on the hex side even when editing the text side.
+                    let cur = ctx.cursor.filter(|c| c.0 == i);
                     let extra = ctx.extra.get(i).copied().unwrap_or(false);
                     let selbg = if sel {
                         theme::SEL_BG
@@ -220,12 +222,15 @@ pub fn build_row(layout: &Layout, ctx: &RowCtx) -> LayoutJob {
                     } else {
                         Color32::TRANSPARENT
                     };
-                    if let Some((_, _, _)) = ctx.cursor.filter(|c| c.0 == i && c.2 == Pane::Text) {
+                    // Match by byte index so the byte is highlighted on the text
+                    // side even when editing the hex side.
+                    if ctx.cursor.filter(|c| c.0 == i).is_some() {
                         if ctx.editing_pane == Pane::Text {
                             bg = theme::CURSOR_BG;
                             color = theme::CURSOR_FG;
                         } else {
-                            bg = theme::GREEN_FAINT;
+                            // text pane is inactive: mirror-highlight the byte
+                            bg = theme::CURSOR_MIRROR;
                         }
                     }
                     job.append(&glyph.to_string(), 0.0, fmt(font, color, bg));
@@ -245,15 +250,17 @@ fn nib_style(
     editing_pane: Pane,
 ) -> (Color32, Color32) {
     match cur {
+        // Editing the hex pane: the active nibble gets the bright caret.
         Some((_, n, _)) if editing_pane == Pane::Hex && n == this_nibble => {
             (theme::CURSOR_FG, theme::CURSOR_BG)
         }
         Some(_) => {
-            // cursor is on this byte but the other nibble / hex pane inactive
             if editing_pane == Pane::Hex {
+                // the cursor byte's other nibble
                 (base, selbg)
             } else {
-                (base, theme::GREEN_FAINT)
+                // hex pane is inactive: mirror-highlight the whole byte
+                (base, theme::CURSOR_MIRROR)
             }
         }
         None => (base, selbg),

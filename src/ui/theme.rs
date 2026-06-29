@@ -24,7 +24,10 @@ pub fn status_color(msg: &str) -> Color32 {
 }
 pub const CURSOR_BG: Color32 = Color32::from_rgb(0x33, 0xff, 0x66);
 pub const CURSOR_FG: Color32 = Color32::from_rgb(0x05, 0x10, 0x08);
-pub const SEL_BG: Color32 = Color32::from_rgb(0x16, 0x3a, 0x28);
+/// The cursor byte mirrored onto the *inactive* pane (text side when editing
+/// hex, and vice versa) — clearly visible but dimmer than the active caret.
+pub const CURSOR_MIRROR: Color32 = Color32::from_rgb(0x1f, 0x80, 0x4a);
+pub const SEL_BG: Color32 = Color32::from_rgb(0x1f, 0x52, 0x39);
 pub const MOD_FG: Color32 = Color32::from_rgb(0xff, 0xb8, 0x4d);
 pub const NULL_FG: Color32 = Color32::from_rgb(0x2c, 0x44, 0x36);
 
