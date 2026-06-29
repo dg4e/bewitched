@@ -68,6 +68,11 @@ blocks.
 - **Binary templates**: a small DSL parses a file into named, typed,
   click-to-jump fields you can **edit by value** and write back; built-ins for
   BMP/PNG/ELF/WAV/GIF.
+- **Struct parser** (Kaitai-inspired, nested): a richer DSL parsing a binary
+  into a collapsible **tree** — user-defined sub-types, `repeat`
+  (count / end-of-stream / until), conditional fields (`if`), enums, and an
+  expression language referencing earlier fields. Built-ins for PNG/GIF/ELF/WAV;
+  also `parse_struct` (MCP) and `struct` (CLI).
 - **Scripting (Rhai)**: run a sandboxed script over the selection/whole file
   with a rich byte API — `read/write`, typed `read_u16…u64`/`i16…i64`/`f32/f64`
   and `write_*` (with endianness), `insert/remove`, `find_byte/find_str`,
@@ -129,7 +134,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (244 tests)
+cargo test                          # run the test suite (256 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -147,6 +152,7 @@ ganghex disasm file.bin aarch64 0 40     # disassemble
 ganghex sigs   firmware.bin              # binwalk-style signature scan
 ganghex pointers dump.bin 0x140001000    # find pointers to an address
 ganghex crc    file.bin 32 0x04C11DB7 0xFFFFFFFF rr 0xFFFFFFFF
+ganghex struct file.png png              # parse a structure into a tree
 ganghex bps    orig.bin mod.bin out.bps  # create a BPS patch
 ganghex --help                           # full command list
 ```
@@ -227,7 +233,8 @@ src/
     diff.rs     detailed binary diff (all differing ranges)
     byteplot.rs byte-as-pixel visualization
     disasm.rs   multi-arch disasm (14 ISAs, pure Rust): x86/ARM/MIPS/PPC/RISC-V/MSP430/6502/SM83
-    template.rs binary template DSL + interpreter + built-ins + field encode
+    template.rs flat binary template DSL + field encode
+    kstruct.rs  nested Kaitai-style struct parser (types/repeat/if/enum/expr)
     compress.rs gzip/zlib/deflate (flate2, pure Rust)
     script.rs / script_store.rs  Rhai scripting + user script library
     script.rs   sandboxed Rhai scripting over a byte buffer
@@ -243,7 +250,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **244 tests**
+Engine, feature operations and GUI are implemented and covered by **256 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 

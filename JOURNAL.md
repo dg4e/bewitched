@@ -672,7 +672,43 @@ Alongside it, several engine features that round out the RE/ROM-hacking story:
 Each is exposed through whichever front-ends make sense (GUI menu, MCP tool, CLI
 subcommand), never reimplemented per surface.
 
-## 13. Known limitations and future work
+## 13. The nested struct parser (Kaitai-inspired)
+
+`kstruct.rs` is the biggest single engine addition: a parser that turns a binary
+into a **tree** of typed fields, going well past the flat `template` engine.
+
+- **Why our own DSL, not Kaitai `.ksy`.** Kaitai's own toolchain is a JVM/Scala
+  compiler — a heavy, non-pure-Rust dependency that cuts against the project's
+  single-`cargo build` grain. So `kstruct` is a small, compact DSL of our own
+  that captures the *capabilities* that matter (nested types, repeat,
+  conditionals, enums, expressions) while staying dependency-free and
+  unit-testable like everything else.
+
+- **Three layers, each tested in isolation.**
+  1. An **expression engine** — a precedence-climbing recursive-descent parser
+     over a hand-written lexer, evaluating `i64` expressions with the full C-like
+     operator set (arithmetic, bitwise, shifts, comparisons, logical) against a
+     scoped variable environment. Field values become variables, so later fields
+     and counts/conditions can reference earlier ones (`bytes(length)`,
+     `if(flags & 1)`, `repeat-until(_ == 0)` where `_` is the last element).
+  2. A **DSL parser** — an indentation-grouped reader producing a `Schema` of a
+     root `seq`, named `type` blocks, and `enum` blocks. The line tokenizer keeps
+     balanced `(...)` groups intact so an expression with spaces is one token.
+  3. An **interpreter** — a cursor walking the `ByteReader`, reading scalars
+     (sized uint/sint/float with per-type or default endianness), `ascii`/`bytes`
+     of expression-computed length, `magic` assertions, and user types
+     (recursively, with a pushed scope). `repeat` builds an array node; `if`
+     skips a field. Guards (max nodes, max depth, zero-width-element break) keep
+     a malformed schema from running away.
+
+- **One engine, three front-ends.** The result `Node` tree renders as a
+  collapsible click-to-jump view in the GUI, as nested JSON from the MCP
+  `parse_struct` tool, and as indented text from the CLI `struct` command —
+  the same now-familiar pattern of building the capability once in `ops` and
+  exposing it everywhere. Built-in schemas (PNG, GIF, ELF64 header, WAV) double
+  as worked examples and as parse-roundtrip tests.
+
+## 14. Known limitations and future work
 
 - **Folded cursor.** Navigation stays in offset space, so the cursor can sit
   inside a collapsed region (invisible until unfolded). A future version could
