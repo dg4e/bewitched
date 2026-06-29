@@ -1027,7 +1027,7 @@ impl App {
             .show(ctx, |ui| {
                 ui.label("address (0x.. hex, or decimal):");
                 let resp = ui.text_edit_singleline(&mut self.goto.text);
-                let go = ui.button("go").clicked()
+                let go = ui.button("go").on_hover_text("jump the hex view to this address (Enter also works)").clicked()
                     || (resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
                 if go {
                     match parse_addr(&self.goto.text) {
@@ -1055,14 +1055,14 @@ impl App {
                 ui.separator();
                 egui::Grid::new("algos").num_columns(2).show(ui, |ui| {
                     for (i, a) in checksum::Algo::ALL.iter().enumerate() {
-                        ui.checkbox(&mut self.checksum.selected[i], a.name());
+                        ui.checkbox(&mut self.checksum.selected[i], a.name()).on_hover_text("include this algorithm when you press compute");
                         if i % 2 == 1 {
                             ui.end_row();
                         }
                     }
                 });
                 ui.separator();
-                if ui.button("compute").clicked() {
+                if ui.button("compute").on_hover_text("hash the selected scope with every checked algorithm").clicked() {
                     let algos: Vec<checksum::Algo> = checksum::Algo::ALL
                         .iter()
                         .enumerate()
@@ -1121,10 +1121,10 @@ impl App {
                         ui.end_row();
                     });
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.checksum.crc_refin, "refin");
-                        ui.checkbox(&mut self.checksum.crc_refout, "refout");
+                        ui.checkbox(&mut self.checksum.crc_refin, "refin").on_hover_text("reflect (bit-reverse) each input byte before processing");
+                        ui.checkbox(&mut self.checksum.crc_refout, "refout").on_hover_text("reflect the final CRC value before the xorout step");
                     });
-                    if ui.button("compute CRC").clicked() {
+                    if ui.button("compute CRC").on_hover_text("run this custom Rocksoft CRC model over the selected scope").clicked() {
                         self.compute_custom_crc();
                     }
                     if !self.checksum.crc_result.is_empty() {
@@ -1149,14 +1149,14 @@ impl App {
             .show(ctx, |ui| {
                 ui.checkbox(&mut self.stats.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
                 ui.horizontal(|ui| {
-                    if ui.button("analyze").clicked() {
+                    if ui.button("analyze").on_hover_text("compute the byte distribution, Shannon entropy and a data-type guess for the scope").clicked() {
                         let (off, len) = self.scope(self.stats.whole_file);
                         let reader = self.doc.reader();
                         self.start_bg("analyzing", len, move |p| {
                             BgOutcome::Stats(Box::new(stats::analyze(&reader, off, len, &p)))
                         });
                     }
-                    if ui.button("entropy map").clicked() {
+                    if ui.button("entropy map").on_hover_text("draw an entropy strip across the scope (green = structured, red = random/compressed); click a band to jump there").clicked() {
                         self.do_entropy_map();
                     }
                 });
@@ -1206,15 +1206,15 @@ impl App {
                     });
                 ui.checkbox(&mut self.export.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
                 ui.horizontal(|ui| {
-                    if ui.button("preview").clicked() {
+                    if ui.button("preview").on_hover_text("render the scope in the chosen format into the box below").clicked() {
                         self.export.preview = self.gen_export();
                     }
-                    if ui.button("copy to clipboard").clicked() {
+                    if ui.button("copy to clipboard").on_hover_text("copy the formatted output to the clipboard").clicked() {
                         let s = self.gen_export();
                         ui.ctx().copy_text(s.clone());
                         self.export.preview = s;
                     }
-                    if ui.button("save to file…").clicked() {
+                    if ui.button("save to file…").on_hover_text("write the formatted output to a file").clicked() {
                         let s = self.gen_export();
                         let ext = export::Format::ALL[self.export.fmt].extension();
                         if let Some(p) = rfd::FileDialog::new().add_filter("export", &[ext]).save_file() {
@@ -1312,7 +1312,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("passes:");
                     ui.text_edit_singleline(&mut self.tools.shred_passes);
-                    if ui.button("pick & shred…").clicked() {
+                    if ui.button("pick & shred…").on_hover_text("pick a file, overwrite it with the given number of random passes, then delete it — irreversible").clicked() {
                         if let Some(p) = rfd::FileDialog::new().pick_file() {
                             let passes: u32 = self.tools.shred_passes.trim().parse().unwrap_or(3);
                             let total = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
@@ -1332,7 +1332,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("chunk size (bytes):");
                     ui.text_edit_singleline(&mut self.tools.split_size);
-                    if ui.button("pick & split…").clicked() {
+                    if ui.button("pick & split…").on_hover_text("pick a file and break it into numbered parts of the given chunk size").clicked() {
                         if let Some(p) = rfd::FileDialog::new().pick_file() {
                             let size: u64 = self.tools.split_size.trim().parse().unwrap_or(1 << 20);
                             let total = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
@@ -1349,14 +1349,14 @@ impl App {
 
                 ui.label(egui::RichText::new("concatenate files").color(theme::GREEN));
                 ui.horizontal(|ui| {
-                    if ui.button("pick inputs…").clicked() {
+                    if ui.button("pick inputs…").on_hover_text("choose the files to join, in order").clicked() {
                         if let Some(files) = rfd::FileDialog::new().pick_files() {
                             self.tools.concat_inputs = files;
                         }
                     }
                     ui.label(format!("{} file(s) selected", self.tools.concat_inputs.len()));
                 });
-                if ui.button("concatenate to…").clicked() && !self.tools.concat_inputs.is_empty() {
+                if ui.button("concatenate to…").on_hover_text("join the selected input files end-to-end into one output file").clicked() && !self.tools.concat_inputs.is_empty() {
                     if let Some(out) = rfd::FileDialog::new().save_file() {
                         let inputs = self.tools.concat_inputs.clone();
                         let total: u64 = inputs.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum();
@@ -1371,7 +1371,7 @@ impl App {
                 ui.separator();
 
                 ui.label(egui::RichText::new("compare two files").color(theme::GREEN));
-                if ui.button("pick a then B…").clicked() {
+                if ui.button("pick a then B…").on_hover_text("byte-compare two files and report the first differing offset and their sizes").clicked() {
                     if let (Some(a), Some(b)) = (
                         rfd::FileDialog::new().set_title("pick file a").pick_file(),
                         rfd::FileDialog::new().set_title("pick file B").pick_file(),
@@ -1422,14 +1422,15 @@ impl App {
                             self.selection_range().is_some(),
                             egui::Button::new("fold selection"),
                         )
+                        .on_hover_text("collapse the current selection into a single folded marker row")
                         .clicked()
                     {
                         self.fold_selection(true);
                     }
-                    if ui.button("unfold all").clicked() {
+                    if ui.button("unfold all").on_hover_text("expand every folded region back to full rows").clicked() {
                         self.unfold_all();
                     }
-                    if ui.button("clear all").clicked() {
+                    if ui.button("clear all").on_hover_text("delete all regions (does not change the document's bytes)").clicked() {
                         self.regions.clear();
                     }
                 });
@@ -1449,9 +1450,9 @@ impl App {
                             for (i, r) in self.regions.iter_mut().enumerate() {
                                 ui.text_edit_singleline(&mut r.label);
                                 ui.label(format!("{:#X}..{:#X} ({})", r.start, r.end(), r.len));
-                                ui.checkbox(&mut r.folded, "");
-                                ui.checkbox(&mut r.accessible, "");
-                                if ui.small_button("✕").clicked() {
+                                ui.checkbox(&mut r.folded, "").on_hover_text("collapse this region to a single marker row");
+                                ui.checkbox(&mut r.accessible, "").on_hover_text("uncheck to treat this region as unreadable (e.g. unmapped RAM) and hide it");
+                                if ui.small_button("✕").on_hover_text("delete this region").clicked() {
                                     remove = Some(i);
                                 }
                                 ui.end_row();
@@ -1672,8 +1673,8 @@ impl App {
                     ui.text_edit_singleline(&mut self.scan.value);
                 });
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut self.scan.aligned, "aligned");
-                    ui.checkbox(&mut self.scan.big_endian, "big-endian");
+                    ui.checkbox(&mut self.scan.aligned, "aligned").on_hover_text("only match at offsets that are a multiple of the value's size (faster, fewer false hits)");
+                    ui.checkbox(&mut self.scan.big_endian, "big-endian").on_hover_text("interpret multi-byte values as big-endian; uncheck for little-endian");
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -1806,7 +1807,7 @@ impl App {
                     ui.end_row();
                 });
                 ui.horizontal(|ui| {
-                    if ui.button("scan").clicked() {
+                    if ui.button("scan").on_hover_text("find values that point at the target address (within the max offset), for building pointer chains").clicked() {
                         self.do_ptrscan();
                     }
                     if !self.ptrscan.status.is_empty() {
@@ -1852,7 +1853,7 @@ impl App {
             .default_width(460.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("scan file").clicked() {
+                    if ui.button("scan file").on_hover_text("scan the whole document for known magic bytes / file signatures; click any hit to jump there").clicked() {
                         self.do_signatures();
                     }
                     ui.label(
@@ -1903,7 +1904,7 @@ impl App {
             .resizable(true)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("render").clicked() {
+                    if ui.button("render").on_hover_text("draw the file as an image — one pixel per (sampled) byte, colored by byte class; click a pixel to jump").clicked() {
                         render = true;
                     }
                     ui.label(
@@ -1954,7 +1955,7 @@ impl App {
             .default_width(460.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("pick file & diff").clicked() {
+                    if ui.button("pick file & diff").on_hover_text("byte-compare the document against another file and list the differing ranges; click one to jump").clicked() {
                         self.do_diff();
                     }
                     if let Some(p) = &self.diff.other {
@@ -2151,12 +2152,12 @@ impl App {
                                 egui::TextEdit::singleline(&mut self.template.edit_buf)
                                     .desired_width(160.0),
                             );
-                            if ui.button("write").clicked()
+                            if ui.button("write").on_hover_text("parse this value and write it back into the document at the field's offset (Enter also works)").clicked()
                                 || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                             {
                                 do_write = true;
                             }
-                            if ui.button("cancel").clicked() {
+                            if ui.button("cancel").on_hover_text("discard the edit without writing").clicked() {
                                 self.template.edit_idx = None;
                             }
                         });
@@ -2221,7 +2222,7 @@ impl App {
             .show(ctx, |ui| {
                 let mut load_src: Option<String> = None;
                 ui.horizontal(|ui| {
-                    if ui.button("run").clicked() {
+                    if ui.button("run").on_hover_text("execute the Rhai script below against the selected scope (sandboxed)").clicked() {
                         self.run_script();
                     }
                     ui.checkbox(&mut self.script.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
@@ -2256,7 +2257,7 @@ impl App {
                             .desired_width(160.0)
                             .hint_text("name"),
                     );
-                    if ui.button("save script").clicked() {
+                    if ui.button("save script").on_hover_text("save the editor contents under this name for the load menu").clicked() {
                         match crate::ops::script_store::save(&self.script.save_name, &self.script.src) {
                             Ok(p) => self.script.output = format!("saved {}", p.display()),
                             Err(e) => self.script.output = format!("save failed: {e}"),
@@ -2342,10 +2343,10 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("PID:");
                     ui.add(egui::TextEdit::singleline(&mut self.process_ui.pid).desired_width(80.0));
-                    if ui.button("list regions").clicked() {
+                    if ui.button("list regions").on_hover_text("enumerate the mapped memory regions of this PID (other PIDs need root / Administrator)").clicked() {
                         self.list_process_regions();
                     }
-                    if ui.button(format!("use self ({})", std::process::id())).clicked() {
+                    if ui.button(format!("use self ({})", std::process::id())).on_hover_text("inspect bewitched's own memory — no elevated privileges required").clicked() {
                         self.process_ui.pid = std::process::id().to_string();
                         self.list_process_regions();
                     }
@@ -2355,7 +2356,7 @@ impl App {
                     ui.add(egui::TextEdit::singleline(&mut self.process_ui.base).desired_width(140.0));
                     ui.label("length:");
                     ui.add(egui::TextEdit::singleline(&mut self.process_ui.len).desired_width(100.0));
-                    if ui.button("open live view").clicked() {
+                    if ui.button("open live view").on_hover_text("open the given base/length window of the process's memory as a live, editable document").clicked() {
                         self.open_process();
                     }
                 });
@@ -2423,7 +2424,7 @@ impl App {
                         .selection_range()
                         .map(|(s, e)| format!("{:#X}..{:#X}", s, e))
                         .unwrap_or_else(|| format!("@ {:#X}", self.cursor));
-                    if ui.button(format!("Add {target}")).clicked() {
+                    if ui.button(format!("add {target}")).on_hover_text("attach the note above to the current selection (or cursor offset)").clicked() {
                         self.add_note();
                     }
                 });
@@ -2626,7 +2627,7 @@ impl App {
                         "…".into()
                     }
                 ));
-                if ui.button("cancel").clicked() {
+                if ui.button("cancel").on_hover_text("stop the running operation").clicked() {
                     cancel = true;
                 }
             });
