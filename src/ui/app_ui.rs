@@ -361,6 +361,9 @@ impl App {
 
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            // Keep the whole bar on one line: fixed items extend to their natural
+            // width and never wrap; only the variable status message truncates.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             let modi = if self.doc.is_modified() { "*" } else { " " };
             ui.label(
                 egui::RichText::new(format!("{}{}", modi, self.doc.label()))
@@ -415,7 +418,12 @@ impl App {
                     .on_hover_text("Ctrl/Cmd+click to add carets · Esc to clear");
                     ui.separator();
                 }
-                ui.label(egui::RichText::new(&self.status).color(theme::status_color(&self.status)));
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&self.status).color(theme::status_color(&self.status)),
+                    )
+                    .truncate(),
+                );
             });
         });
     }
