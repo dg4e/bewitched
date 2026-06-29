@@ -514,7 +514,7 @@ impl App {
                                     let relx = pos.x - resp.rect.left();
                                     let col = (relx / char_w).floor();
                                     if col >= 0.0 {
-                                        if let Some((i, pane, nib)) =
+                                        if let Some((i, pane, _nib)) =
                                             layout.col_to_byte(col as usize)
                                         {
                                             let off = (base + i as u64).min(len);
@@ -523,7 +523,9 @@ impl App {
                                                 self.toggle_extra_cursor(off);
                                             } else {
                                                 let extend = resp.dragged();
-                                                self.click_to(off, pane, nib, extend);
+                                                // Always land on the first (high)
+                                                // nibble of the clicked byte.
+                                                self.click_to(off, pane, 0, extend);
                                             }
                                         }
                                     }
