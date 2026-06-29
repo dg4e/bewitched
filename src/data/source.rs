@@ -1,6 +1,6 @@
 //! Byte sources.
 //!
-//! Everything ganghex edits — a regular file, a raw disk, a region of RAM, or a
+//! Everything bewitched edits — a regular file, a raw disk, a region of RAM, or a
 //! scratch buffer — is exposed through the [`DataSource`] trait: a flat,
 //! addressable, read-only stream of bytes with a known length. The editing layer
 //! ([`crate::data::document::Document`]) layers a piece-table on top so the
@@ -171,7 +171,7 @@ mod tests {
     fn file_source_mmap_reads() {
         let mut path = std::env::temp_dir();
         let stamp = &path as *const _ as usize;
-        path.push(format!("ganghex_src_{:x}.bin", stamp));
+        path.push(format!("bewitched_src_{:x}.bin", stamp));
         let payload: Vec<u8> = (0..5000u32).map(|x| x as u8).collect();
         std::fs::write(&path, &payload).unwrap();
 
@@ -192,7 +192,7 @@ mod tests {
     fn empty_file_is_seek_backed() {
         let mut path = std::env::temp_dir();
         let stamp = (&path as *const _ as usize).wrapping_add(1);
-        path.push(format!("ganghex_empty_{:x}.bin", stamp));
+        path.push(format!("bewitched_empty_{:x}.bin", stamp));
         std::fs::write(&path, b"").unwrap();
         let src = FileSource::open(&path).unwrap();
         assert_eq!(src.len(), 0);

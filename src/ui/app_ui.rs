@@ -119,7 +119,7 @@ impl App {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Save annotations (.ghx)").clicked() {
+                if ui.button("Save annotations (.bw)").clicked() {
                     self.save_annotations();
                     ui.close_menu();
                 }
@@ -344,18 +344,18 @@ impl App {
             });
 
             ui.menu_button("Help", |ui| {
-                if ui.button("About ganghex").clicked() {
+                if ui.button("About bewitched").clicked() {
                     self.about_open = true;
                     ui.close_menu();
                 }
                 if ui.button("Find updates…").clicked() {
-                    self.status = "ganghex 0.1.0 — you are running the latest local build".into();
+                    self.status = "bewitched 0.1.0 — you are running the latest local build".into();
                     ui.close_menu();
                 }
             });
 
             ui.separator();
-            ui.label(egui::RichText::new("ganghex").color(theme::GREEN).strong());
+            ui.label(egui::RichText::new("bewitched").color(theme::GREEN).strong());
         });
     }
 
@@ -2296,7 +2296,7 @@ impl App {
                 });
                 ui.label(
                     egui::RichText::new(
-                        "notes are saved to <file>.ghx via File ▸ Save annotations, and \
+                        "notes are saved to <file>.bw via File ▸ Save annotations, and \
                          auto-loaded when you reopen the file",
                     )
                     .small()
@@ -2344,11 +2344,11 @@ impl App {
 
     fn about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.about_open;
-        egui::Window::new("About ganghex")
+        egui::Window::new("About bewitched")
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.label(egui::RichText::new("ganghex 0.1.0").heading().color(theme::GREEN));
+                ui.label(egui::RichText::new("bewitched 0.1.0").heading().color(theme::GREEN));
                 ui.label("a fast, cross-platform, hacker-esque hex editor");
                 ui.label("for files, raw disks and RAM — up to 8 EB.");
                 ui.separator();

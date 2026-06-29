@@ -321,7 +321,7 @@ impl Document {
         use std::io::Write;
         let path = path.as_ref();
         // Write to a temp file then rename, so a crash can't truncate the target.
-        let tmp = path.with_extension("ganghex.tmp");
+        let tmp = path.with_extension("bewitched.tmp");
         {
             let mut f = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
             let mut off = 0u64;
@@ -634,7 +634,7 @@ mod tests {
     fn save_reopen_roundtrip() {
         let mut path = std::env::temp_dir();
         let stamp = &path as *const _ as usize;
-        path.push(format!("ganghex_save_{:x}.bin", stamp));
+        path.push(format!("bewitched_save_{:x}.bin", stamp));
 
         let mut d = doc_with(b"original content here");
         d.overwrite(0, b"EDITED");

@@ -451,6 +451,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "bewitched"
+version = "0.1.0"
+dependencies = [
+ "adler",
+ "crc",
+ "crc32fast",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "flate2",
+ "iced-x86",
+ "mach2",
+ "md-5",
+ "memmap2",
+ "ppc750cl",
+ "raki",
+ "rfd",
+ "rhai",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "windows-sys 0.59.0",
+ "yaxpeax-6502",
+ "yaxpeax-arch 0.2.8",
+ "yaxpeax-arch 0.3.2",
+ "yaxpeax-arm",
+ "yaxpeax-mips",
+ "yaxpeax-msp430",
+ "yaxpeax-sm83",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1356,38 +1388,6 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
-]
-
-[[package]]
-name = "ganghex"
-version = "0.1.0"
-dependencies = [
- "adler",
- "crc",
- "crc32fast",
- "eframe",
- "egui",
- "egui_extras",
- "flate2",
- "iced-x86",
- "mach2",
- "md-5",
- "memmap2",
- "ppc750cl",
- "raki",
- "rfd",
- "rhai",
- "serde_json",
- "sha1",
- "sha2",
- "windows-sys 0.59.0",
- "yaxpeax-6502",
- "yaxpeax-arch 0.2.8",
- "yaxpeax-arch 0.3.2",
- "yaxpeax-arm",
- "yaxpeax-mips",
- "yaxpeax-msp430",
- "yaxpeax-sm83",
 ]
 
 [[package]]

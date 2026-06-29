@@ -2,14 +2,14 @@
 //!
 //! The core functions take an explicit directory (so they are trivially testable
 //! without touching the real config dir); the public wrappers use the per-user
-//! config location, overridable with `GANGHEX_SCRIPT_DIR`.
+//! config location, overridable with `BEWITCHED_SCRIPT_DIR`.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 /// The directory where user scripts live.
 pub fn scripts_dir() -> PathBuf {
-    if let Ok(d) = std::env::var("GANGHEX_SCRIPT_DIR") {
+    if let Ok(d) = std::env::var("BEWITCHED_SCRIPT_DIR") {
         return PathBuf::from(d);
     }
     #[cfg(windows)]
@@ -19,7 +19,7 @@ pub fn scripts_dir() -> PathBuf {
         .ok()
         .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.config")));
     let mut p = PathBuf::from(base.unwrap_or_else(|| ".".into()));
-    p.push("ganghex");
+    p.push("bewitched");
     p.push("scripts");
     p
 }
@@ -95,7 +95,7 @@ mod tests {
         static C: AtomicU64 = AtomicU64::new(0);
         let mut d = std::env::temp_dir();
         d.push(format!(
-            "ganghex_scripts_{:?}_{}",
+            "bewitched_scripts_{:?}_{}",
             std::thread::current().id(),
             C.fetch_add(1, Ordering::Relaxed)
         ));

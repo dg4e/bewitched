@@ -1,4 +1,4 @@
-# ganghex
+# bewitched
 
 A fast, cross-platform, hacker-esque **hex editor** for files, raw disks and RAM
 — written in Rust with an immediate-mode (`egui`) GUI. It edits files of any size
@@ -6,11 +6,11 @@ A fast, cross-platform, hacker-esque **hex editor** for files, raw disks and RAM
 task-oriented interface.
 
 ```
-┌─ ganghex ─────────────────────────────────────────────────────────┐
+┌─ bewitched ───────────────────────────────────────────────────────┐
 │ File  Edit  View  Search  Tools  Help                              │
 ├───────────────────────────────────────────────────────────────────┤
-│ 00000000  48 65 6C 6C 6F 2C 20 67  61 6E 67 68 65 78 21 00  Hello, ganghex!·│
-│ 00000010  01 02 DE AD BE EF 20 54  68 65 20 71 75 69 63 6B  ······ The quick│
+│ 00000000  42 65 77 69 74 63 68 65  64 21 00 01 02 DE AD BE  Bewitched!·····º│
+│ 00000010  EF 20 54 68 65 20 71 75  69 63 6B 20 62 72 6F 77  ï The quick brow│
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -80,7 +80,7 @@ blocks.
   (`cursor/sel_start/doc_len/…`) and side effects (`set_cursor/add_region/
   add_note`) — plus a **library** of built-in scripts (XOR, ROT13, reverse, …)
   and **user-saved scripts** (`Save script`, persisted to the config dir).
-- **MCP server**: `ganghex --mcp` runs a Model Context Protocol server (JSON-RPC
+- **MCP server**: `bewitched --mcp` runs a Model Context Protocol server (JSON-RPC
   over stdio) advertising `tools`, `resources` and `prompts`. Read tools
   (read_hex, checksums, statistics, search, strings, signatures, disassemble,
   inspect, export, apply_template), write tools (write_bytes, transform,
@@ -89,7 +89,7 @@ blocks.
   analyze *and* edit binaries; resources expose templates/scripts/reference
   lists and prompts give canned analysis recipes.
 - **Annotations**: bookmarks, regions and free-text notes persist to a
-  human-readable `<file>.ghx` sidecar (auto-loaded on reopen).
+  human-readable `<file>.bw` sidecar (auto-loaded on reopen).
 - **Disassembly** (14 architectures, pure Rust — no C dependency): x86-16/32/64
   (`iced-x86`), ARM A32 / Thumb / AArch64 (`yaxpeax-arm`), MIPS LE/BE
   (`yaxpeax-mips`), PowerPC (`ppc750cl`), RISC-V 32/64 (`raki`), MSP430
@@ -141,26 +141,26 @@ Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
 
 ### Headless CLI
 
-A subcommand turns ganghex into a scriptable analysis tool (no GUI):
+A subcommand turns bewitched into a scriptable analysis tool (no GUI):
 
 ```sh
-ganghex sha256 file.bin                  # also: md5 sha1 sha512 crc32 sum
-ganghex dump   file.bin 0x40 256         # hex dump a range
-ganghex strings file.bin 6               # extract strings (min length 6)
-ganghex search file.bin 'DE ?? BE EF'    # wildcard byte search
-ganghex disasm file.bin aarch64 0 40     # disassemble
-ganghex sigs   firmware.bin              # binwalk-style signature scan
-ganghex pointers dump.bin 0x140001000    # find pointers to an address
-ganghex crc    file.bin 32 0x04C11DB7 0xFFFFFFFF rr 0xFFFFFFFF
-ganghex struct file.png png              # parse a structure into a tree
-ganghex bps    orig.bin mod.bin out.bps  # create a BPS patch
-ganghex --help                           # full command list
+bewitched sha256 file.bin                  # also: md5 sha1 sha512 crc32 sum
+bewitched dump   file.bin 0x40 256         # hex dump a range
+bewitched strings file.bin 6               # extract strings (min length 6)
+bewitched search file.bin 'DE ?? BE EF'    # wildcard byte search
+bewitched disasm file.bin aarch64 0 40     # disassemble
+bewitched sigs   firmware.bin              # binwalk-style signature scan
+bewitched pointers dump.bin 0x140001000    # find pointers to an address
+bewitched crc    file.bin 32 0x04C11DB7 0xFFFFFFFF rr 0xFFFFFFFF
+bewitched struct file.png png              # parse a structure into a tree
+bewitched bps    orig.bin mod.bin out.bps  # create a BPS patch
+bewitched --help                           # full command list
 ```
 
 ### Editions / packaging
 
 - **Portable edition** — `cargo build --release` produces a single,
-  self-contained, stripped binary at `target/release/ganghex`. Copy it
+  self-contained, stripped binary at `target/release/bewitched`. Copy it
   anywhere and run; no installation needed.
 - **Installable edition** — native installers are produced from the metadata in
   `Cargo.toml`:
@@ -171,14 +171,14 @@ ganghex --help                           # full command list
 
 ## MCP server
 
-`ganghex --mcp` speaks the Model Context Protocol over stdio (newline-delimited
-JSON-RPC 2.0), so an LLM/agent can analyze binaries through ganghex's engine.
+`bewitched --mcp` speaks the Model Context Protocol over stdio (newline-delimited
+JSON-RPC 2.0), so an LLM/agent can analyze binaries through bewitched's engine.
 Point an MCP client at the binary:
 
 ```json
 {
   "mcpServers": {
-    "ganghex": { "command": "/path/to/ganghex", "args": ["--mcp"] }
+    "bewitched": { "command": "/path/to/bewitched", "args": ["--mcp"] }
   }
 }
 ```
@@ -195,7 +195,7 @@ sessions: `open` returns a session id, then
 piece table (undoable; written on `session_save`).
 
 The server also serves **resources** — built-in templates, built-in *and*
-user-saved scripts (`ganghex://scripts/…`), reference lists, and a `file://`
+user-saved scripts (`bewitched://scripts/…`), reference lists, and a `file://`
 template to read any file as a hex dump — plus **prompts** (`identify-file`,
 `analyze-binary`, `find-secrets`).
 
@@ -238,9 +238,9 @@ src/
     compress.rs gzip/zlib/deflate (flate2, pure Rust)
     script.rs / script_store.rs  Rhai scripting + user script library
     script.rs   sandboxed Rhai scripting over a byte buffer
-    sidecar.rs  persistent annotations (.ghx): bookmarks/regions/notes
-  cli.rs        headless CLI subcommands — ganghex sha256 FILE ...
-  mcp.rs        MCP (Model Context Protocol) server — ganghex --mcp
+    sidecar.rs  persistent annotations (.bw): bookmarks/regions/notes
+  cli.rs        headless CLI subcommands — bewitched sha256 FILE ...
+  mcp.rs        MCP (Model Context Protocol) server — bewitched --mcp
   ui/           egui front-end
     app.rs / app_ui.rs   application state, menus, hex view, dialogs
     hexview.rs  column math, colored row building, click hit-testing

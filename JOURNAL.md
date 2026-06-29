@@ -1,6 +1,6 @@
-# ganghex — design journal
+# bewitched — design journal
 
-This document explains *why* ganghex is built the way it is: the central design
+This document explains *why* bewitched is built the way it is: the central design
 decisions, how the pieces fit together, and the trade-offs behind each choice.
 It is meant to be read top-to-bottom by someone who wants to understand or extend
 the codebase, not as API reference (the doc-comments in the source serve that).
@@ -9,7 +9,7 @@ the codebase, not as API reference (the doc-comments in the source serve that).
 
 ## 1. Goals and the one hard constraint
 
-ganghex is a hex editor for **files, raw disks and RAM**. The product brief asked
+bewitched is a hex editor for **files, raw disks and RAM**. The product brief asked
 for a long feature list, but almost every interesting decision flows from a single
 hard constraint:
 
@@ -556,7 +556,7 @@ pure cores with thin UI.
   the process too when one is live.
 
 - **Annotations sidecar** (`sidecar.rs`). Bookmarks, regions and notes persist to
-  a human-readable `<file>.ghx` next to the document, auto-loaded on reopen. The
+  a human-readable `<file>.bw` next to the document, auto-loaded on reopen. The
   format is line-oriented and forward-compatible (unknown lines are skipped), so
   it hand-edits and diffs cleanly and is trivially round-trip tested.
 
@@ -581,7 +581,7 @@ pure cores with thin UI.
 
 ## 11. The MCP server
 
-`mcp.rs` exposes ganghex's engine over the **Model Context Protocol** so an
+`mcp.rs` exposes bewitched's engine over the **Model Context Protocol** so an
 LLM/agent can analyze binaries — the inverse of the GUI: instead of a human
 driving the tools, a model does.
 
@@ -631,7 +631,7 @@ driving the tools, a model does.
 
 - **Resources and prompts.** Beyond `tools`, the server implements MCP
   `resources` (the built-in templates, the script library, and reference lists —
-  architectures / export formats / checksum algorithms — under `ganghex://` URIs)
+  architectures / export formats / checksum algorithms — under `bewitched://` URIs)
   and `prompts` (canned recipes `identify-file` / `analyze-binary` /
   `find-secrets` that fill in the target path and steer the model to the right
   tools). `initialize` advertises all three capabilities.

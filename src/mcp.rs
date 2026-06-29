@@ -1,6 +1,6 @@
 //! Model Context Protocol (MCP) server.
 //!
-//! Exposes ganghex's engine to an LLM/agent: read bytes, search, digests,
+//! Exposes bewitched's engine to an LLM/agent: read bytes, search, digests,
 //! statistics, strings, signatures, disassembly (14 architectures), typed
 //! inspection, export, templates, IPS patches, transforms, and full editing
 //! **sessions** (open/read/write/insert/delete/undo/save) plus headless Rhai
@@ -8,7 +8,7 @@
 //! library, and reference lists) and `prompts` (canned analysis recipes).
 //!
 //! Transport is the standard MCP stdio transport: newline-delimited JSON-RPC 2.0
-//! on stdin/stdout. Run with `ganghex --mcp`.
+//! on stdin/stdout. Run with `bewitched --mcp`.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -81,7 +81,7 @@ impl Server {
             json!({
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
-                "serverInfo": { "name": "ganghex", "version": env!("CARGO_PKG_VERSION") }
+                "serverInfo": { "name": "bewitched", "version": env!("CARGO_PKG_VERSION") }
             }),
         )),
         "ping" => Some(result_response(&id, json!({}))),
@@ -463,7 +463,7 @@ fn resources_list() -> Value {
     let mut out: Vec<Value> = Vec::new();
     for (name, _) in template::BUILTINS {
         out.push(json!({
-            "uri": format!("ganghex://templates/{name}"),
+            "uri": format!("bewitched://templates/{name}"),
             "name": format!("template: {name}"),
             "description": "built-in binary template (DSL source)",
             "mimeType": "text/plain"
@@ -471,7 +471,7 @@ fn resources_list() -> Value {
     }
     for (name, _) in crate::ops::script::LIBRARY {
         out.push(json!({
-            "uri": format!("ganghex://scripts/{name}"),
+            "uri": format!("bewitched://scripts/{name}"),
             "name": format!("script: {name}"),
             "description": "built-in Rhai script (source)",
             "mimeType": "text/plain"
@@ -479,7 +479,7 @@ fn resources_list() -> Value {
     }
     for (name, _) in crate::ops::script_store::list() {
         out.push(json!({
-            "uri": format!("ganghex://scripts/{name}"),
+            "uri": format!("bewitched://scripts/{name}"),
             "name": format!("saved script: {name}"),
             "description": "user-saved Rhai script (source)",
             "mimeType": "text/plain"
@@ -487,7 +487,7 @@ fn resources_list() -> Value {
     }
     for r in ["architectures", "formats", "checksums"] {
         out.push(json!({
-            "uri": format!("ganghex://reference/{r}"),
+            "uri": format!("bewitched://reference/{r}"),
             "name": format!("reference: {r}"),
             "description": "names accepted by the corresponding tools",
             "mimeType": "text/plain"
@@ -515,31 +515,31 @@ fn read_resource(uri: &str) -> Result<String, String> {
         let len = doc.len().min(64 * 1024);
         return Ok(export::export(&doc, 0, len, export::Format::PlainHexDump));
     }
-    if let Some(name) = uri.strip_prefix("ganghex://templates/") {
+    if let Some(name) = uri.strip_prefix("bewitched://templates/") {
         return template::BUILTINS
             .iter()
             .find(|(n, _)| *n == name)
             .map(|(_, s)| s.to_string())
             .ok_or_else(|| format!("no template '{name}'"));
     }
-    if let Some(name) = uri.strip_prefix("ganghex://scripts/") {
+    if let Some(name) = uri.strip_prefix("bewitched://scripts/") {
         if let Some((_, s)) = crate::ops::script::LIBRARY.iter().find(|(n, _)| *n == name) {
             return Ok(s.to_string());
         }
         return crate::ops::script_store::load(name).ok_or_else(|| format!("no script '{name}'"));
     }
     match uri {
-        "ganghex://reference/architectures" => Ok(disasm::Arch::ALL
+        "bewitched://reference/architectures" => Ok(disasm::Arch::ALL
             .iter()
             .map(|a| a.label())
             .collect::<Vec<_>>()
             .join("\n")),
-        "ganghex://reference/formats" => Ok(export::Format::ALL
+        "bewitched://reference/formats" => Ok(export::Format::ALL
             .iter()
             .map(|f| format!("{} (.{})", f.name(), f.extension()))
             .collect::<Vec<_>>()
             .join("\n")),
-        "ganghex://reference/checksums" => Ok(checksum::Algo::ALL
+        "bewitched://reference/checksums" => Ok(checksum::Algo::ALL
             .iter()
             .map(|a| a.name())
             .collect::<Vec<_>>()
@@ -582,7 +582,7 @@ fn get_prompt(name: &str, args: &Value) -> Result<Value, String> {
         other => return Err(format!("unknown prompt: {other}")),
     };
     Ok(json!({
-        "description": format!("ganghex: {name}"),
+        "description": format!("bewitched: {name}"),
         "messages": [ { "role": "user", "content": { "type": "text", "text": text } } ]
     }))
 }
@@ -1046,7 +1046,7 @@ mod tests {
         static C: AtomicU64 = AtomicU64::new(0);
         let mut p = std::env::temp_dir();
         p.push(format!(
-            "ganghex_mcp_{:?}_{}.bin",
+            "bewitched_mcp_{:?}_{}.bin",
             std::thread::current().id(),
             C.fetch_add(1, Ordering::Relaxed)
         ));
@@ -1057,7 +1057,7 @@ mod tests {
     #[test]
     fn initialize_advertises_server() {
         let resp = Server::new().handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize"})).unwrap();
-        assert_eq!(resp["result"]["serverInfo"]["name"], "ganghex");
+        assert_eq!(resp["result"]["serverInfo"]["name"], "bewitched");
         assert_eq!(resp["result"]["protocolVersion"], PROTOCOL_VERSION);
     }
 
@@ -1087,18 +1087,18 @@ mod tests {
         let mut s = Server::new();
         let list = s.handle(&json!({"jsonrpc":"2.0","id":1,"method":"resources/list"})).unwrap();
         let res = list["result"]["resources"].as_array().unwrap();
-        assert!(res.iter().any(|r| r["uri"] == "ganghex://reference/architectures"));
+        assert!(res.iter().any(|r| r["uri"] == "bewitched://reference/architectures"));
         // read the template PNG source
         let read = s.handle(&json!({
             "jsonrpc":"2.0","id":2,"method":"resources/read",
-            "params":{"uri":"ganghex://templates/PNG image"}
+            "params":{"uri":"bewitched://templates/PNG image"}
         })).unwrap();
         let text = read["result"]["contents"][0]["text"].as_str().unwrap();
         assert!(text.contains("ihdr_type"));
         // read the arch reference
         let arch = s.handle(&json!({
             "jsonrpc":"2.0","id":3,"method":"resources/read",
-            "params":{"uri":"ganghex://reference/architectures"}
+            "params":{"uri":"bewitched://reference/architectures"}
         })).unwrap();
         assert!(arch["result"]["contents"][0]["text"].as_str().unwrap().contains("ARM64"));
     }
@@ -1146,7 +1146,7 @@ mod tests {
     #[test]
     fn resources_read_unknown_errors() {
         let resp = Server::new().handle(&json!({
-            "jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"ganghex://nope"}
+            "jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"bewitched://nope"}
         })).unwrap();
         assert_eq!(resp["error"]["code"], -32602);
     }

@@ -1,5 +1,5 @@
 [package]
-name = "ganghex"
+name = "bewitched"
 version = "0.1.0"
 edition = "2021"
 description = "A fast, cross-platform, hacker-esque hex editor for files, disks and RAM"
@@ -7,7 +7,7 @@ authors = ["realytcracker"]
 license = "MIT"
 
 [[bin]]
-name = "ganghex"
+name = "bewitched"
 path = "src/main.rs"
 
 [dependencies]
@@ -59,18 +59,18 @@ strip = true
 [profile.dev]
 opt-level = 1
 
-# Portable edition: the release binary at target/release/ganghex is fully
+# Portable edition: the release binary at target/release/bewitched is fully
 # self-contained — copy it anywhere and run, no installation required.
 #
 # Installable edition: `cargo install cargo-bundle` then `cargo bundle --release`
 # produces a native installer/app bundle (.app/.dmg on macOS, .deb on Linux,
 # .msi on Windows) from the metadata below.
 [package.metadata.bundle]
-name = "ganghex"
-identifier = "net.realytcracker.ganghex"
+name = "bewitched"
+identifier = "net.realytcracker.bewitched"
 short_description = "A fast, cross-platform, hacker-esque hex editor."
 long_description = """
-ganghex is a fast hex editor for files, raw disks and RAM. It opens inputs of
+bewitched is a fast hex editor for files, raw disks and RAM. It opens inputs of
 any size instantly via memory mapping and a piece-table edit model with
 unlimited undo, and offers search/replace, checksums, statistics, export,
 byte patterns, data-folds and file tools.

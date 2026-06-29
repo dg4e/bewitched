@@ -75,18 +75,18 @@ pub fn is_elevated() -> bool {
 pub fn privilege_note() -> &'static str {
     #[cfg(target_os = "macos")]
     {
-        "macOS: run ganghex as root (sudo), or code-sign it with the \
+        "macOS: run bewitched as root (sudo), or code-sign it with the \
          com.apple.security.cs.debugger / get-task-allow entitlement. \
          System Integrity Protection blocks Apple/system processes regardless."
     }
     #[cfg(target_os = "linux")]
     {
-        "Linux: run ganghex as root (sudo), or grant CAP_SYS_PTRACE / set \
+        "Linux: run bewitched as root (sudo), or grant CAP_SYS_PTRACE / set \
          /proc/sys/kernel/yama/ptrace_scope=0 for non-root attaching."
     }
     #[cfg(target_os = "windows")]
     {
-        "Windows: run ganghex as Administrator (SeDebugPrivilege) to open other \
+        "Windows: run bewitched as Administrator (SeDebugPrivilege) to open other \
          processes."
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]

@@ -1,6 +1,6 @@
 //! Headless command-line mode for scripting and pipelines.
 //!
-//! Invoked when ganghex is run with a recognized subcommand (anything other than
+//! Invoked when bewitched is run with a recognized subcommand (anything other than
 //! a bare file path or `--mcp`). Returns the process exit code. All operations
 //! reuse the same `ops` engine as the GUI and MCP server.
 
@@ -17,32 +17,32 @@ pub enum Mode {
 }
 
 const USAGE: &str = "\
-ganghex — hex editor & binary analysis
+bewitched — hex editor & binary analysis
 
 GUI:
-  ganghex [FILE|DEVICE]         open the editor (optionally on a file/device)
+  bewitched [FILE|DEVICE]         open the editor (optionally on a file/device)
 
 MCP server:
-  ganghex --mcp                 run as a Model Context Protocol server (stdio)
+  bewitched --mcp                 run as a Model Context Protocol server (stdio)
 
 Headless commands (read FILE, print to stdout):
-  ganghex dump   FILE [OFF] [LEN]          hex dump
-  ganghex sha256 FILE                      SHA-256 (also: md5 sha1 sha512 crc32)
-  ganghex sum    FILE [ALGO...]            one or more digests
-  ganghex strings FILE [MINLEN]            extract ASCII/UTF-16 strings
-  ganghex search FILE PATTERN              wildcard hex search, e.g. 'DE ?? EF'
-  ganghex find   FILE TEXT                 plain text search
-  ganghex stats  FILE                      entropy + classification
-  ganghex scan   FILE TYPE VALUE           value scan (i32/f32/text/hex/...)
-  ganghex sigs   FILE                      detect embedded formats (binwalk)
-  ganghex disasm FILE ARCH [OFF] [COUNT]   disassemble
-  ganghex pointers FILE TARGET [MAXOFF]    find 64-bit pointers to TARGET
-  ganghex export FILE FORMAT [OFF] [LEN]   export (e.g. 'C source', base64)
-  ganghex struct FILE BUILTIN [OFF]        parse a structure tree (PNG/GIF/ELF/WAV)
-  ganghex gunzip FILE                      decompress (auto-detect) to stdout
-  ganghex crc    FILE W POLY INIT R X      custom CRC (W bits, R='rr'/'--')
-  ganghex bps    ORIG MOD OUT              create a BPS patch ORIG→MOD
-  ganghex --help | --version
+  bewitched dump   FILE [OFF] [LEN]          hex dump
+  bewitched sha256 FILE                      SHA-256 (also: md5 sha1 sha512 crc32)
+  bewitched sum    FILE [ALGO...]            one or more digests
+  bewitched strings FILE [MINLEN]            extract ASCII/UTF-16 strings
+  bewitched search FILE PATTERN              wildcard hex search, e.g. 'DE ?? EF'
+  bewitched find   FILE TEXT                 plain text search
+  bewitched stats  FILE                      entropy + classification
+  bewitched scan   FILE TYPE VALUE           value scan (i32/f32/text/hex/...)
+  bewitched sigs   FILE                      detect embedded formats (binwalk)
+  bewitched disasm FILE ARCH [OFF] [COUNT]   disassemble
+  bewitched pointers FILE TARGET [MAXOFF]    find 64-bit pointers to TARGET
+  bewitched export FILE FORMAT [OFF] [LEN]   export (e.g. 'C source', base64)
+  bewitched struct FILE BUILTIN [OFF]        parse a structure tree (PNG/GIF/ELF/WAV)
+  bewitched gunzip FILE                      decompress (auto-detect) to stdout
+  bewitched crc    FILE W POLY INIT R X      custom CRC (W bits, R='rr'/'--')
+  bewitched bps    ORIG MOD OUT              create a BPS patch ORIG→MOD
+  bewitched --help | --version
 ";
 
 /// Inspect argv (excluding the program name) and decide whether this is a CLI run.
@@ -58,7 +58,7 @@ pub fn dispatch(args: &[String]) -> Mode {
     let code = match run(cmd, rest) {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("ganghex: {e}");
+            eprintln!("bewitched: {e}");
             1
         }
     };
@@ -319,7 +319,7 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static C: AtomicU64 = AtomicU64::new(0);
         let mut p = std::env::temp_dir();
-        p.push(format!("ganghex_cli_{:?}_{}.bin", std::thread::current().id(), C.fetch_add(1, Ordering::Relaxed)));
+        p.push(format!("bewitched_cli_{:?}_{}.bin", std::thread::current().id(), C.fetch_add(1, Ordering::Relaxed)));
         std::fs::write(&p, bytes).unwrap();
         p
     }

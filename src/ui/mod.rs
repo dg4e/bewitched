@@ -22,7 +22,7 @@ pub fn run() -> eframe::Result<()> {
     for arg in &argv {
         match arg.as_str() {
             "--version" | "-V" => {
-                println!("ganghex {}", env!("CARGO_PKG_VERSION"));
+                println!("bewitched {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
             "--mcp" => {
@@ -41,11 +41,11 @@ pub fn run() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 720.0])
             .with_min_inner_size([640.0, 360.0])
-            .with_title("ganghex"),
+            .with_title("bewitched"),
         ..Default::default()
     };
     eframe::run_native(
-        "ganghex",
+        "bewitched",
         options,
         Box::new(move |cc| Ok(Box::new(App::new(cc, startup)))),
     )

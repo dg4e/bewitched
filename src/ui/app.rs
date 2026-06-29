@@ -1,4 +1,4 @@
-//! The ganghex application: state, menus, the interactive hex view and dialogs.
+//! The bewitched application: state, menus, the interactive hex view and dialogs.
 
 use std::path::PathBuf;
 use std::thread::JoinHandle;
@@ -670,11 +670,11 @@ impl App {
         self.notes = sc.notes;
     }
 
-    /// Save annotations to `<doc>.ghx` (or prompt if the doc is unsaved).
+    /// Save annotations to `<doc>.bw` (or prompt if the doc is unsaved).
     fn save_annotations(&mut self) {
         let path = match &self.doc.path {
             Some(p) => sidecar::sidecar_path(p),
-            None => match rfd::FileDialog::new().add_filter("ganghex", &["ghx"]).save_file() {
+            None => match rfd::FileDialog::new().add_filter("bewitched", &["bw"]).save_file() {
                 Some(p) => p,
                 None => return,
             },
@@ -703,14 +703,14 @@ impl App {
     }
 
     fn load_annotations_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("ganghex", &["ghx"]).pick_file() {
+        if let Some(p) = rfd::FileDialog::new().add_filter("bewitched", &["bw"]).pick_file() {
             if self.load_annotations_from(&p) {
                 self.status = format!("loaded annotations from {}", p.display());
             }
         }
     }
 
-    /// Auto-load a sibling `<doc>.ghx` if present (called after opening a file).
+    /// Auto-load a sibling `<doc>.bw` if present (called after opening a file).
     fn autoload_annotations(&mut self) {
         if let Some(p) = self.doc.path.clone() {
             let side = sidecar::sidecar_path(&p);
@@ -1343,7 +1343,7 @@ impl App {
         let (off, len) = self.scope(true);
         let body = export::export(&self.doc, off, len, export::Format::Html);
         let mut path = std::env::temp_dir();
-        path.push(format!("ganghex_print_{}.html", self.doc.label().replace('/', "_")));
+        path.push(format!("bewitched_print_{}.html", self.doc.label().replace('/', "_")));
         match std::fs::write(&path, body.as_bytes()) {
             Ok(()) => {
                 if let Err(e) = open_in_default_app(&path) {
