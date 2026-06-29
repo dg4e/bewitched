@@ -3,6 +3,7 @@
 mod app;
 mod charset;
 mod hexview;
+pub mod icon;
 mod theme;
 
 use app::App;
@@ -37,11 +38,17 @@ pub fn run() -> eframe::Result<()> {
         }
     }
 
+    let (rgba, iw, ih) = icon::rgba(8);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 720.0])
             .with_min_inner_size([640.0, 360.0])
-            .with_title("bewitched"),
+            .with_title("bewitched")
+            .with_icon(egui::IconData {
+                rgba,
+                width: iw,
+                height: ih,
+            }),
         ..Default::default()
     };
     eframe::run_native(
