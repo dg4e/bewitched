@@ -244,12 +244,7 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
 }
 
 fn parse_u64(s: Option<&String>) -> Option<u64> {
-    let s = s?.trim();
-    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u64::from_str_radix(h, 16).ok()
-    } else {
-        s.parse().ok()
-    }
+    crate::ops::parse_u64(s?)
 }
 
 fn digest_algo(name: &str) -> Option<checksum::Algo> {
@@ -354,7 +349,7 @@ mod tests {
         let p = tmpfile(&data);
         let path = p.to_string_lossy().into_owned();
         assert!(run("pointers", &[path.clone(), "0x1000".into()]).is_ok());
-        assert!(run("search", &[path.clone(), "00 ?? 00".into()]).is_ok());
+        assert!(run("search", &[path, "00 ?? 00".into()]).is_ok());
         let _ = std::fs::remove_file(&p);
     }
 

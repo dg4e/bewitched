@@ -8,8 +8,8 @@ use egui::{Key, Sense};
 
 use crate::data::{Document, MemRegion, ProcessHandle, ProcessSource, Region, RowItem, ViewMap};
 use crate::ops::{
-    byteplot, checksum, compress, diff, disasm, export, fileops, inspect, patch, pattern, pointer,
-    scan, script, search, sidecar, signatures, stats, strings, template, transform, Progress,
+    byteplot, checksum, compress, diff, disasm, export, fileops, inspect, parse_u64, patch, pattern,
+    pointer, scan, script, search, sidecar, signatures, stats, strings, template, transform, Progress,
 };
 
 use super::charset::Charset;
@@ -943,20 +943,12 @@ impl App {
     }
 
     fn do_ptrscan(&mut self) {
-        let pa = |s: &str| {
-            let s = s.trim();
-            if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-                u64::from_str_radix(h, 16).ok()
-            } else {
-                s.parse().ok()
-            }
-        };
-        let Some(target) = pa(&self.ptrscan.target) else {
+        let Some(target) = parse_u64(&self.ptrscan.target) else {
             self.ptrscan.status = "enter a target address".into();
             return;
         };
-        let base = pa(&self.ptrscan.base).unwrap_or(0);
-        let max_off = pa(&self.ptrscan.max_offset).unwrap_or(0x400);
+        let base = parse_u64(&self.ptrscan.base).unwrap_or(0);
+        let max_off = parse_u64(&self.ptrscan.max_offset).unwrap_or(0x400);
         let reader = self.doc.reader();
         self.ptrscan.results = pointer::find_pointers_to(
             &reader, base, target, max_off, 8, 100_000, &Progress::default(),

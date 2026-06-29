@@ -276,7 +276,7 @@ mod tests {
         assert_eq!(&patch[patch.len() - 3..], b"EOF");
 
         let writes = parse_ips(&patch).unwrap();
-        let mut rebuilt = original.clone();
+        let mut rebuilt = original;
         apply_to_vec(&mut rebuilt, &writes);
         assert_eq!(rebuilt, modified);
     }
@@ -372,7 +372,7 @@ mod tests {
         let writes = parse_ips(&patch).unwrap();
         // 0x20000 bytes / 0xFFFF max per record => at least 3 records
         assert!(writes.len() >= 3);
-        let mut rebuilt = original.clone();
+        let mut rebuilt = original;
         apply_to_vec(&mut rebuilt, &writes);
         assert_eq!(rebuilt, modified);
     }

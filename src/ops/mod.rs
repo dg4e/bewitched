@@ -27,6 +27,17 @@ pub mod strings;
 pub mod template;
 pub mod transform;
 
+/// Parse a `0x`-prefixed hex or plain decimal unsigned integer — an offset,
+/// length or address as typed by the user. Whitespace is trimmed.
+pub fn parse_u64(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(h, 16).ok()
+    } else {
+        s.parse().ok()
+    }
+}
+
 /// Cooperative progress/cancel handle shared with long-running operations.
 #[derive(Clone)]
 pub struct Progress {

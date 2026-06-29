@@ -1051,7 +1051,7 @@ impl App {
             .open(&mut open)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.checkbox(&mut self.checksum.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
+                scope_checkbox(ui, &mut self.checksum.whole_file);
                 ui.separator();
                 egui::Grid::new("algos").num_columns(2).show(ui, |ui| {
                     for (i, a) in checksum::Algo::ALL.iter().enumerate() {
@@ -1147,7 +1147,7 @@ impl App {
             .resizable(true)
             .default_width(560.0)
             .show(ctx, |ui| {
-                ui.checkbox(&mut self.stats.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
+                scope_checkbox(ui, &mut self.stats.whole_file);
                 ui.horizontal(|ui| {
                     if ui.button("analyze").on_hover_text("compute the byte distribution, Shannon entropy and a data-type guess for the scope").clicked() {
                         let (off, len) = self.scope(self.stats.whole_file);
@@ -1204,7 +1204,7 @@ impl App {
                             ui.selectable_value(&mut self.export.fmt, i, f.name());
                         }
                     });
-                ui.checkbox(&mut self.export.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
+                scope_checkbox(ui, &mut self.export.whole_file);
                 ui.horizontal(|ui| {
                     if ui.button("preview").on_hover_text("render the scope in the chosen format into the box below").clicked() {
                         self.export.preview = self.gen_export();
@@ -1592,7 +1592,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("min length:");
                     ui.add(egui::TextEdit::singleline(&mut self.strings.min_len).desired_width(48.0));
-                    ui.checkbox(&mut self.strings.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
+                    scope_checkbox(ui, &mut self.strings.whole_file);
                     if ui.button("scan").on_hover_text("find printable strings in the file/selection").clicked() {
                         self.do_strings();
                     }
@@ -1612,12 +1612,7 @@ impl App {
                                     crate::ops::strings::Kind::Ascii => f.text.len() as u64,
                                     crate::ops::strings::Kind::Utf16 => (f.text.chars().count() * 2) as u64,
                                 };
-                                if ui
-                                    .add(egui::Label::new(
-                                        egui::RichText::new(format!("{:#010X}", f.offset))
-                                            .color(theme::ADDR),
-                                    )
-                                    .sense(egui::Sense::click()))
+                                if addr_link(ui, format!("{:#010X}", f.offset), theme::ADDR)
                                     .on_hover_text("jump to and select this string")
                                     .clicked()
                                 {
@@ -1745,11 +1740,7 @@ impl App {
                 egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                     egui::Grid::new("scan_grid").num_columns(2).striped(true).show(ui, |ui| {
                         for m in self.scan.matches.iter().take(2000) {
-                            if ui
-                                .add(egui::Label::new(
-                                    egui::RichText::new(format!("{:#010X}", m.offset))
-                                        .color(theme::ADDR),
-                                ).sense(egui::Sense::click()))
+                            if addr_link(ui, format!("{:#010X}", m.offset), theme::ADDR)
                                 .clicked()
                             {
                                 jump = Some(m.offset);
@@ -1821,10 +1812,7 @@ impl App {
                         ui.label(egui::RichText::new("offset").color(theme::ADDR));
                         ui.end_row();
                         for (addr, off) in self.ptrscan.results.iter().take(2000) {
-                            if ui
-                                .add(egui::Label::new(
-                                    egui::RichText::new(format!("{:#018X}", addr)).color(theme::GREEN),
-                                ).sense(egui::Sense::click()))
+                            if addr_link(ui, format!("{:#018X}", addr), theme::GREEN)
                                 .clicked()
                             {
                                 jump = Some(*addr);
@@ -1837,8 +1825,7 @@ impl App {
             });
         if let Some(addr) = jump {
             // jump to the pointer's document offset (addr - base)
-            let base = self.ptrscan.base.trim().trim_start_matches("0x");
-            let base = u64::from_str_radix(base, 16).ok().or_else(|| self.ptrscan.base.trim().parse().ok()).unwrap_or(0);
+            let base = parse_u64(&self.ptrscan.base).unwrap_or(0);
             self.jump_to(addr.saturating_sub(base).min(self.doc.len()));
         }
         self.ptrscan.open = open;
@@ -1865,11 +1852,7 @@ impl App {
                 egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                     egui::Grid::new("sig_grid").num_columns(3).striped(true).show(ui, |ui| {
                         for h in &self.signatures.results {
-                            if ui
-                                .add(egui::Label::new(
-                                    egui::RichText::new(format!("{:#010X}", h.offset))
-                                        .color(theme::ADDR),
-                                ).sense(egui::Sense::click()))
+                            if addr_link(ui, format!("{:#010X}", h.offset), theme::ADDR)
                                 .clicked()
                             {
                                 jump = Some(h.offset);
@@ -1975,11 +1958,7 @@ impl App {
                         ui.label(egui::RichText::new("length").color(theme::ADDR));
                         ui.end_row();
                         for r in &self.diff.ranges {
-                            if ui
-                                .add(egui::Label::new(
-                                    egui::RichText::new(format!("{:#010X}", r.offset))
-                                        .color(theme::GREEN),
-                                ).sense(egui::Sense::click()))
+                            if addr_link(ui, format!("{:#010X}", r.offset), theme::GREEN)
                                 .clicked()
                             {
                                 jump = Some(r.offset);
@@ -2021,11 +2000,7 @@ impl App {
                 egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                     egui::Grid::new("disasm_grid").num_columns(3).striped(true).show(ui, |ui| {
                         for i in &ins {
-                            if ui
-                                .add(egui::Label::new(
-                                    egui::RichText::new(format!("{:08X}", i.offset))
-                                        .color(theme::ADDR),
-                                ).sense(egui::Sense::click()))
+                            if addr_link(ui, format!("{:08X}", i.offset), theme::ADDR)
                                 .clicked()
                             {
                                 jump = Some(i.offset);
@@ -2174,11 +2149,7 @@ impl App {
                         ui.label("");
                         ui.end_row();
                         for (i, f) in self.template.fields.iter().enumerate() {
-                            if ui
-                                .add(egui::Label::new(
-                                    egui::RichText::new(format!("{:#010X}", f.offset))
-                                        .color(theme::GREEN),
-                                ).sense(egui::Sense::click()))
+                            if addr_link(ui, format!("{:#010X}", f.offset), theme::GREEN)
                                 .clicked()
                             {
                                 jump = Some(f.offset);
@@ -2225,7 +2196,7 @@ impl App {
                     if ui.button("run").on_hover_text("execute the Rhai script below against the selected scope (sandboxed)").clicked() {
                         self.run_script();
                     }
-                    ui.checkbox(&mut self.script.whole_file, "whole file (else selection)").on_hover_text("operate on the whole document; uncheck to use the current selection");
+                    scope_checkbox(ui, &mut self.script.whole_file);
                     egui::ComboBox::from_label("load")
                         .selected_text("library / saved")
                         .show_ui(ui, |ui| {
@@ -2374,11 +2345,7 @@ impl App {
                         ui.label(egui::RichText::new("perms").color(theme::ADDR));
                         ui.end_row();
                         for r in &self.process_ui.regions {
-                            if ui
-                                .add(egui::Label::new(
-                                    egui::RichText::new(format!("{:#018X}", r.base))
-                                        .color(theme::GREEN),
-                                ).sense(egui::Sense::click()))
+                            if addr_link(ui, format!("{:#018X}", r.base), theme::GREEN)
                                 .on_hover_text("click to load base/length")
                                 .clicked()
                             {
@@ -2445,11 +2412,7 @@ impl App {
                         ui.label("");
                         ui.end_row();
                         for (i, n) in self.notes.iter().enumerate() {
-                            if ui
-                                .add(egui::Label::new(
-                                    egui::RichText::new(format!("{:#010X}", n.offset))
-                                        .color(theme::GREEN),
-                                ).sense(egui::Sense::click()))
+                            if addr_link(ui, format!("{:#010X}", n.offset), theme::GREEN)
                                 .clicked()
                             {
                                 jump = Some(n.offset);
@@ -2743,10 +2706,7 @@ fn draw_distribution(ui: &mut egui::Ui, counts: &[u64; 256]) {
 /// node's offset jumps the cursor there.
 fn kstruct_node_ui(ui: &mut egui::Ui, node: &crate::ops::kstruct::Node, jump: &mut Option<u64>) {
     let header = |ui: &mut egui::Ui| {
-        if ui
-            .add(egui::Label::new(
-                egui::RichText::new(format!("{:#X}", node.offset)).color(theme::ADDR),
-            ).sense(egui::Sense::click()))
+        if addr_link(ui, format!("{:#X}", node.offset), theme::ADDR)
             .clicked()
         {
             *jump = Some(node.offset);
@@ -2825,6 +2785,19 @@ fn wave_text(
             col,
         );
     }
+}
+
+/// A clickable monospace address cell used throughout the result tables
+/// (strings, scan, signatures, diff, struct fields, notes, process regions…).
+/// Returns the `Response` so callers can chain `.on_hover_text` / `.clicked`.
+fn addr_link(ui: &mut egui::Ui, text: String, color: egui::Color32) -> egui::Response {
+    ui.add(egui::Label::new(egui::RichText::new(text).color(color)).sense(egui::Sense::click()))
+}
+
+/// The "whole file (else selection)" scope toggle shared by the analysis windows.
+fn scope_checkbox(ui: &mut egui::Ui, whole: &mut bool) {
+    ui.checkbox(whole, "whole file (else selection)")
+        .on_hover_text("operate on the whole document; uncheck to use the current selection");
 }
 
 /// Draw the entropy strip (0..8 bits mapped green→amber→red). Returns the
