@@ -29,6 +29,7 @@ impl eframe::App for App {
         self.byteplot_window(ctx);
         self.diff_window(ctx);
         self.disasm_window(ctx);
+        self.kstruct_window(ctx);
         self.template_window(ctx);
         self.script_window(ctx);
         self.process_window(ctx);
@@ -325,6 +326,10 @@ impl App {
                 }
                 if ui.button("Binary template (structure view)…").clicked() {
                     self.template.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("Struct parser (nested tree)…").clicked() {
+                    self.kstruct.open = true;
                     ui.close_menu();
                 }
                 if ui.button("Script (Rhai)…").clicked() {
@@ -1890,6 +1895,60 @@ impl App {
         self.disasm.open = open;
     }
 
+    fn kstruct_window(&mut self, ctx: &egui::Context) {
+        use crate::ops::kstruct;
+        let mut open = self.kstruct.open;
+        let mut jump: Option<u64> = None;
+        egui::Window::new("Struct parser")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(620.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    egui::ComboBox::from_label("Built-in")
+                        .selected_text(kstruct::BUILTINS[self.kstruct.builtin].0)
+                        .show_ui(ui, |ui| {
+                            for (i, (name, _)) in kstruct::BUILTINS.iter().enumerate() {
+                                if ui.selectable_value(&mut self.kstruct.builtin, i, *name).clicked() {
+                                    self.kstruct.src = kstruct::BUILTINS[i].1.to_string();
+                                }
+                            }
+                        });
+                    if ui.button("Parse at cursor").clicked() {
+                        self.apply_kstruct();
+                    }
+                });
+                ui.collapsing("schema (editable DSL — sub-types, repeat, if, enums)", |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut self.kstruct.src)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_rows(8)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+                if !self.kstruct.status.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&self.kstruct.status)
+                            .color(theme::status_color(&self.kstruct.status)),
+                    );
+                }
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
+                    if let Some(root) = &self.kstruct.tree {
+                        for c in &root.children {
+                            kstruct_node_ui(ui, c, &mut jump);
+                        }
+                    } else {
+                        ui.label(egui::RichText::new("press Parse").color(theme::GREEN_DIM));
+                    }
+                });
+            });
+        if let Some(off) = jump {
+            self.set_cursor(off.min(self.doc.len()), false);
+        }
+        self.kstruct.open = open;
+    }
+
     fn template_window(&mut self, ctx: &egui::Context) {
         let mut open = self.template.open;
         let mut jump: Option<u64> = None;
@@ -2416,6 +2475,38 @@ fn draw_distribution(ui: &mut egui::Ui, counts: &[u64; 256]) {
             theme::GREEN_DIM
         };
         painter.rect_filled(bar, 0.0, color);
+    }
+}
+
+/// Recursively render a kstruct node. Containers are collapsible; clicking a
+/// node's offset jumps the cursor there.
+fn kstruct_node_ui(ui: &mut egui::Ui, node: &crate::ops::kstruct::Node, jump: &mut Option<u64>) {
+    let header = |ui: &mut egui::Ui| {
+        if ui
+            .add(egui::Label::new(
+                egui::RichText::new(format!("{:#X}", node.offset)).color(theme::ADDR),
+            ).sense(egui::Sense::click()))
+            .clicked()
+        {
+            *jump = Some(node.offset);
+        }
+        ui.label(egui::RichText::new(&node.name).color(theme::GREEN));
+        ui.label(egui::RichText::new(&node.kind).color(theme::GREEN_DIM));
+        if !node.value.is_empty() {
+            ui.label(egui::RichText::new(format!("= {}", node.value)).monospace());
+        }
+    };
+    if node.children.is_empty() {
+        ui.horizontal(header);
+    } else {
+        let id = ui.make_persistent_id((node.offset, node.name.as_str()));
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+            .show_header(ui, header)
+            .body(|ui| {
+                for c in &node.children {
+                    kstruct_node_ui(ui, c, jump);
+                }
+            });
     }
 }
 

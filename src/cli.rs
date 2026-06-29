@@ -38,6 +38,7 @@ Headless commands (read FILE, print to stdout):
   ganghex disasm FILE ARCH [OFF] [COUNT]   disassemble
   ganghex pointers FILE TARGET [MAXOFF]    find 64-bit pointers to TARGET
   ganghex export FILE FORMAT [OFF] [LEN]   export (e.g. 'C source', base64)
+  ganghex struct FILE BUILTIN [OFF]        parse a structure tree (PNG/GIF/ELF/WAV)
   ganghex gunzip FILE                      decompress (auto-detect) to stdout
   ganghex crc    FILE W POLY INIT R X      custom CRC (W bits, R='rr'/'--')
   ganghex bps    ORIG MOD OUT              create a BPS patch ORIG→MOD
@@ -69,7 +70,7 @@ fn is_command(s: &str) -> bool {
         s,
         "dump" | "sha256" | "md5" | "sha1" | "sha512" | "crc32" | "sum" | "strings" | "search"
             | "find" | "stats" | "scan" | "sigs" | "disasm" | "pointers" | "export" | "gunzip"
-            | "bps" | "crc" | "help" | "--help" | "-h"
+            | "bps" | "crc" | "struct" | "help" | "--help" | "-h"
     )
 }
 
@@ -202,6 +203,21 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
             let codec = compress::detect(&data).ok_or("could not detect gzip/zlib header")?;
             let out = compress::decompress(&data, codec)?;
             std::io::stdout().write_all(&out).map_err(|e| e.to_string())?;
+        }
+        "struct" => {
+            use crate::ops::kstruct;
+            let key = args.get(1).map(|s| s.to_lowercase()).unwrap_or_else(|| "png".into());
+            let off = parse_u64(args.get(2)).unwrap_or(0);
+            let src = kstruct::BUILTINS
+                .iter()
+                .find(|(n, _)| n.to_lowercase().contains(&key))
+                .map(|(_, s)| *s)
+                .ok_or_else(|| format!("no built-in schema matching '{key}'"))?;
+            let schema = kstruct::Schema::parse(src)?;
+            let root = kstruct::apply(&schema, &doc, off)?;
+            let mut out = String::new();
+            kstruct::render_tree(&root, 0, &mut out);
+            print!("{out}");
         }
         "crc" => {
             // crc FILE WIDTH POLY INIT REFL XOROUT  (REFL = 'rr','--','r-','-r')

@@ -12,6 +12,7 @@ pub mod disasm;
 pub mod export;
 pub mod fileops;
 pub mod inspect;
+pub mod kstruct;
 pub mod patch;
 pub mod pattern;
 pub mod pointer;

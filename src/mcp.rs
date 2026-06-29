@@ -672,7 +672,12 @@ fn tools_list() -> Value {
           "inputSchema": path_schema(json!({
             "offset": {"type":"integer"}, "length": {"type":"integer"},
             "format": {"type":"string","description":"format name, e.g. 'C source', 'Base64', 'Intel HEX'"} })) },
-        { "name": "apply_template", "description": "Parse a structure with a built-in or custom binary template.",
+        { "name": "parse_struct", "description": "Parse a structure into a tree with the nested Kaitai-style schema engine (sub-types, repeat, if, enums, expressions).",
+          "inputSchema": path_schema(json!({
+            "builtin": {"type":"string","description":"PNG|GIF|ELF|WAV (case-insensitive substring)"},
+            "schema": {"type":"string","description":"custom schema DSL (overrides builtin)"},
+            "offset": {"type":"integer"} })) },
+        { "name": "apply_template", "description": "Parse a structure with a built-in or custom binary template (flat fields).",
           "inputSchema": path_schema(json!({
             "builtin": {"type":"string","description":"BMP|PNG|ELF|WAV|GIF (case-insensitive substring)"},
             "template": {"type":"string","description":"custom template DSL source (overrides builtin)"},
@@ -902,6 +907,32 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let fmt = parse_format(args.get("format").and_then(|v| v.as_str()).unwrap_or("Hex dump (plain text)"))?;
             Ok(export::export(&doc, off, len, fmt))
         }
+        "parse_struct" => {
+            use crate::ops::kstruct;
+            let src = if let Some(s) = args.get("schema").and_then(|v| v.as_str()) {
+                s.to_string()
+            } else {
+                let key = args.get("builtin").and_then(|v| v.as_str()).unwrap_or("PNG").to_lowercase();
+                kstruct::BUILTINS
+                    .iter()
+                    .find(|(n, _)| n.to_lowercase().contains(&key))
+                    .map(|(_, s)| s.to_string())
+                    .ok_or_else(|| format!("no built-in schema matching '{key}'"))?
+            };
+            let schema = kstruct::Schema::parse(&src)?;
+            let root = kstruct::apply(&schema, &doc, off)?;
+            fn node_to_json(n: &kstruct::Node) -> Value {
+                let mut o = json!({
+                    "name": n.name, "offset": n.offset, "size": n.size,
+                    "type": n.kind, "value": n.value,
+                });
+                if !n.children.is_empty() {
+                    o["children"] = Value::Array(n.children.iter().map(node_to_json).collect());
+                }
+                o
+            }
+            Ok(node_to_json(&root).to_string())
+        }
         "apply_template" => {
             let src = if let Some(s) = args.get("template").and_then(|v| v.as_str()) {
                 s.to_string()
@@ -1070,6 +1101,30 @@ mod tests {
             "params":{"uri":"ganghex://reference/architectures"}
         })).unwrap();
         assert!(arch["result"]["contents"][0]["text"].as_str().unwrap().contains("ARM64"));
+    }
+
+    #[test]
+    fn parse_struct_tool_tree() {
+        // a minimal WAV header
+        let mut data = Vec::new();
+        data.extend_from_slice(b"RIFF");
+        data.extend_from_slice(&36u32.to_le_bytes());
+        data.extend_from_slice(b"WAVE");
+        data.extend_from_slice(b"fmt ");
+        data.extend_from_slice(&16u32.to_le_bytes());
+        data.extend_from_slice(&1u16.to_le_bytes()); // audio_format
+        data.extend_from_slice(&2u16.to_le_bytes()); // channels
+        data.extend_from_slice(&44100u32.to_le_bytes());
+        data.resize(44, 0);
+        let p = tmpfile(&data);
+        let resp = call(&mut Server::new(), "parse_struct", json!({
+            "path": p.to_str().unwrap(), "builtin": "WAV"
+        }));
+        // find the channels field in the tree
+        let chans = resp["children"].as_array().unwrap().iter()
+            .find(|c| c["name"] == "channels").unwrap();
+        assert_eq!(chans["value"], "2");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

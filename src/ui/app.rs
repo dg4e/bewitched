@@ -228,6 +228,26 @@ impl Default for DisasmState {
     }
 }
 
+struct KStructState {
+    open: bool,
+    builtin: usize,
+    src: String,
+    tree: Option<crate::ops::kstruct::Node>,
+    status: String,
+}
+
+impl Default for KStructState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            builtin: 0,
+            src: crate::ops::kstruct::BUILTINS[0].1.to_string(),
+            tree: None,
+            status: String::new(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct ExportState {
     open: bool,
@@ -371,6 +391,7 @@ pub struct App {
     byteplot: ByteplotState,
     diff: DiffState,
     disasm: DisasmState,
+    kstruct: KStructState,
     template: TemplateState,
     script: ScriptState,
     process_ui: ProcessUiState,
@@ -446,6 +467,7 @@ impl App {
             byteplot: ByteplotState::default(),
             diff: DiffState::default(),
             disasm: DisasmState::default(),
+            kstruct: KStructState::default(),
             template: TemplateState::default(),
             script: ScriptState::default(),
             process_ui: ProcessUiState {
@@ -1249,6 +1271,29 @@ impl App {
         }
     }
 
+    // ---- struct parser (kstruct) ----
+
+    fn apply_kstruct(&mut self) {
+        use crate::ops::kstruct;
+        match kstruct::Schema::parse(&self.kstruct.src) {
+            Ok(schema) => match kstruct::apply(&schema, &self.doc, self.cursor) {
+                Ok(root) => {
+                    let n = count_nodes(&root);
+                    self.kstruct.status = format!("parsed {n} node(s)");
+                    self.kstruct.tree = Some(root);
+                }
+                Err(e) => {
+                    self.kstruct.status = e;
+                    self.kstruct.tree = None;
+                }
+            },
+            Err(e) => {
+                self.kstruct.status = e;
+                self.kstruct.tree = None;
+            }
+        }
+    }
+
     // ---- binary templates ----
 
     fn apply_template(&mut self) {
@@ -1704,6 +1749,10 @@ fn rebase_deletes_at(positions: &[u64]) -> Vec<u64> {
             p - before
         })
         .collect()
+}
+
+fn count_nodes(n: &crate::ops::kstruct::Node) -> usize {
+    1 + n.children.iter().map(count_nodes).sum::<usize>()
 }
 
 fn human(n: u64) -> String {
