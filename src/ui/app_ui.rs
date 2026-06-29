@@ -351,10 +351,6 @@ impl App {
                     self.about_open = true;
                     ui.close_menu();
                 }
-                if ui.button("Find updates…").on_hover_text("Check for a newer version").clicked() {
-                    self.status = "bewitched 0.1.0 — you are running the latest local build".into();
-                    ui.close_menu();
-                }
             });
 
             ui.separator();
