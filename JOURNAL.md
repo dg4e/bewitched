@@ -82,6 +82,23 @@ Implementations:
   paged in by the OS only when actually read. Zero-length files and sources that
   refuse to be mapped (some raw devices) fall back to positioned `seek`+`read`
   behind a `Mutex` so the type stays `Sync`.
+
+  **Device size needs an OS query, not `stat`.** `metadata().len()` returns *0*
+  for raw block/character devices on every platform — so a real disk would open
+  as an empty source and the whole disk/RAM feature would silently do nothing.
+  When `stat` reports 0, `FileSource::open` therefore asks the OS for the true
+  size: `BLKGETSIZE64` (Linux), `DKIOCGETBLOCKSIZE`×`DKIOCGETBLOCKCOUNT` (macOS),
+  and `IOCTL_DISK_GET_LENGTH_INFO` via `DeviceIoControl` (Windows). A regular
+  empty file is left at 0 (the ioctl fails with `ENOTTY` → `None`), so normal
+  files are unaffected; a detected device stays on the `seek` backing. One trap
+  worth recording: `ioctl` is a C **variadic** function, and on AArch64 (Apple
+  Silicon, ARM Linux) variadic arguments are passed on the stack, not in a
+  register. Declaring the data argument as a *fixed* parameter therefore corrupts
+  the pointer and the call returns `EFAULT`; the extern must be declared
+  `fn ioctl(fd, request, ...)` with the pointer passed through `...`. (Verified
+  end-to-end against an attached disk image: correct size, and reads work on the
+  buffered device node; raw `/dev/rdiskN` nodes still require block-aligned reads,
+  noted as a limitation in §14.)
 - **`MemSource`** — an owned `Vec<u8>`, used for synthetic/small documents and for
   test fixtures.
 - **`EmptySource`** — length 0, used for "new document."
@@ -629,6 +646,20 @@ driving the tools, a model does.
   reuses `ops::diff`. New capability in the engine, exposed identically to the GUI
   and to MCP, is the recurring pattern.
 
+- **A working directory for relative paths.** The server keeps full filesystem
+  reach (absolute paths open anything — by design, an agent analyzing binaries
+  needs that), but a bare relative path needs a stable anchor. So `Server` holds
+  a `cwd` (defaulting to the process's launch directory) and a single
+  `resolve_path_args` step rewrites every path-like argument (`path`, `output`,
+  `original`, `modified`, `patch`, `path_a`, `path_b`) to an absolute path
+  *before* dispatch — so all ~30 tools and the stateless `call_tool` resolve
+  relative paths without per-tool changes, and absolute paths pass through
+  untouched. `get_working_dir` / `set_working_dir` expose it like `pwd`/`cd`
+  (the latter validates the target is a directory and canonicalizes it); the
+  `file://` resource resolves the same way. This is ergonomics, not a sandbox:
+  the trust model is still "whoever drives the MCP stdio gets the user's own
+  filesystem access."
+
 - **Resources and prompts.** Beyond `tools`, the server implements MCP
   `resources` (the built-in templates, the script library, and reference lists —
   architectures / export formats / checksum algorithms — under `bewitched://` URIs)
@@ -722,6 +753,12 @@ into a **tree** of typed fields, going well past the flat `template` engine.
 - **RAM region discovery.** Regions are a general, user-driven feature; populating
   them automatically from OS memory maps (`/proc/.../maps`, Mach VM regions,
   `VirtualQuery`) when opening a memory source is a natural extension.
+- **Raw-device read alignment.** Device *size* is now detected (§3.1), but macOS
+  raw nodes (`/dev/rdiskN`) require block-aligned reads, while the `seek` backing
+  issues reads at arbitrary offsets/lengths — so an unaligned read on a raw node
+  can fail with `EINVAL`. The buffered node (`/dev/diskN`) has no such constraint.
+  A future version could align reads to the device block size, or prefer the
+  buffered node.
 
 ### Still on the list
 
@@ -747,3 +784,56 @@ privilege handling. What remains is narrow:
   `resources/subscribe` change notifications, would deepen the integration.
 - **Windows runtime testing.** The Windows process backend remains
   compile-verified only (no Windows host here to run it).
+
+## 15. Hardening against adversarial input
+
+bewitched parses untrusted binaries and text DSLs, and three front-ends (GUI,
+CLI, MCP) feed offsets/lengths/files into the same `ops`. A review pass hardened
+the seams where attacker-controlled data reaches an allocation or arithmetic.
+The unifying rule: **a malformed file or out-of-range argument must fail with an
+error, never panic/abort the process, and never silently wrap to a wrong value.**
+
+- **Allocations are sized to reality, not to a header.** The keystone is
+  `Document::read_range`: it caps the buffer to the bytes actually available from
+  `offset` (reading past EOF returns nothing anyway), so a length field of
+  `0xFFFFFFFF` in a template/struct — or a giant `length` MCP/CLI argument — can
+  no longer drive a multi-gigabyte `vec![0u8; len]` → abort. The same discipline
+  caps BPS apply's `Vec::with_capacity(target_size)` (an untrusted varint) and
+  the Rhai `resize`/`push`/`insert` buffer growth (Rhai's own array/string caps
+  don't bound our custom `Vec<u8>`). Fixing `read_range` once neutralized the
+  template/struct length-field OOM for free — the payoff of a single shared
+  read path (§3.4).
+
+- **Offset arithmetic saturates, division is checked, shifts are bounded.**
+  `offset + len` over `u64` in the streaming ops (`stats`, `checksum`, `strings`,
+  `export`) became `saturating_add` (it was a debug panic / release wrong-value).
+  The `kstruct` expression engine — whose operands can be file-derived `u64`s cast
+  to `i64` — now uses `wrapping_*` for `+ - * neg`, `checked_div`/`checked_rem`
+  (so `i64::MIN / -1` is an error, not a release-mode panic), and rejects shift
+  counts outside `0..64`. The BPS varint decoder bounds its shift with
+  `checked_shl`/`checked_add` so an all-continuation varint errors instead of
+  overflowing.
+
+- **Validate types/widths at the boundary.** `kstruct`'s `scalar_type` now only
+  accepts whole-byte widths ≤ 64 bits (and floats only at 32/64), rejecting
+  nonsense like `s128` whose downstream `64 - w*8` would underflow. `template`'s
+  `skip` saturates its cursor advance.
+
+- **The Rhai sandbox is capability-, not allow-list-, bounded.** `Engine::new()`
+  registers *only* the byte-buffer API — no file/OS/process/env functions exist
+  to call — so a script cannot escape to the filesystem; the limits added are
+  purely about resource exhaustion (a 256 MiB buffer ceiling plus the existing
+  operation cap), verified with a negative test (`open_file`/`system` error out).
+
+- **MCP keeps full reach, with honest framing.** The server deliberately is *not*
+  sandboxed to a directory — an analysis agent needs to open arbitrary files —
+  but relative paths now anchor to a working directory (§11) and the trust model
+  is documented rather than implied: driving `--mcp` grants the user's own
+  filesystem access.
+
+Each fix carries a regression test pinned to the adversarial input that used to
+crash it (oversized `read_range`, `i64::MIN / -1` end-to-end through a crafted
+file + schema, malformed/huge BPS records, the `offset+len` overflows, the Rhai
+growth cap and FS-escape attempt). The bias is the same as everywhere else: put
+the guard in a pure function and pin it with a test, so the invariant can't
+silently regress.

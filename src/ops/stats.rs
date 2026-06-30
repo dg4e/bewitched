@@ -43,7 +43,7 @@ impl Stats {
 }
 
 pub fn analyze(doc: &dyn ByteReader, offset: u64, len: u64, progress: &Progress) -> Stats {
-    let end = (offset + len).min(doc.len());
+    let end = offset.saturating_add(len).min(doc.len());
     progress.set_total(end.saturating_sub(offset));
     let mut counts = [0u64; 256];
     let mut total = 0u64;
@@ -96,7 +96,7 @@ pub fn entropy_map(
 ) -> Vec<f32> {
     const SAMPLE: u64 = 1 << 16;
     let buckets = buckets.max(1);
-    let total = (offset + len).min(doc.len()).saturating_sub(offset);
+    let total = offset.saturating_add(len).min(doc.len()).saturating_sub(offset);
     progress.set_total(buckets as u64);
     let mut out = Vec::with_capacity(buckets);
     if total == 0 {
@@ -141,6 +141,15 @@ mod tests {
     use super::*;
     use crate::data::{Document, MemSource};
     use std::sync::Arc;
+
+    #[test]
+    fn analyze_offset_len_overflow_is_safe() {
+        // `offset + len` overflowing u64 must not panic (it did in debug builds);
+        // an out-of-range window simply yields nothing.
+        let doc = Document::from_source(Arc::new(MemSource::new(vec![0u8; 16], "t")));
+        let s = analyze(&doc, u64::MAX - 1, u64::MAX, &Progress::default());
+        assert_eq!(s.total, 0);
+    }
 
     #[test]
     fn uniform_zero_entropy() {

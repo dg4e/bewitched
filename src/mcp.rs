@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
@@ -28,16 +29,62 @@ pub fn serve() -> std::io::Result<()> {
     Server::new().run_stdio()
 }
 
-/// MCP server state. Holds open editing sessions across `tools/call`s.
-#[derive(Default)]
+/// Path argument keys whose (relative) values are resolved against the server's
+/// working directory before a tool runs. Absolute paths are passed through.
+const PATH_KEYS: &[&str] = &[
+    "path", "output", "original", "modified", "patch", "path_a", "path_b",
+];
+
+/// MCP server state. Holds open editing sessions across `tools/call`s plus a
+/// working directory that relative path arguments resolve against.
 pub struct Server {
     sessions: HashMap<u64, Document>,
     next_id: u64,
+    /// Base directory for resolving relative path arguments. The server still
+    /// has full filesystem reach — absolute paths bypass it — this just gives
+    /// relative paths a stable, agent-controllable anchor (see set_working_dir).
+    cwd: PathBuf,
+}
+
+impl Default for Server {
+    fn default() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            next_id: 0,
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        }
+    }
 }
 
 impl Server {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Resolve a path argument: absolute paths are returned unchanged; relative
+    /// ones are joined onto the working directory.
+    fn resolve(&self, p: &str) -> PathBuf {
+        let path = Path::new(p);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.cwd.join(path)
+        }
+    }
+
+    /// Return a copy of `args` with every known path key resolved to an absolute
+    /// path, so downstream tool code (here and in `call_tool`) needs no changes.
+    fn resolve_path_args(&self, args: &Value) -> Value {
+        let mut a = args.clone();
+        if let Some(obj) = a.as_object_mut() {
+            for key in PATH_KEYS {
+                if let Some(Value::String(s)) = obj.get(*key) {
+                    let resolved = self.resolve(s).to_string_lossy().into_owned();
+                    obj.insert((*key).to_string(), Value::String(resolved));
+                }
+            }
+        }
+        a
     }
 
     /// Run the server loop over stdin/stdout until EOF.
@@ -97,7 +144,7 @@ impl Server {
                 .and_then(|p| p.get("uri"))
                 .and_then(|u| u.as_str())
                 .unwrap_or("");
-            match read_resource(uri) {
+            match read_resource(uri, &self.cwd) {
                 Ok(text) => Some(result_response(
                     &id,
                     json!({ "contents": [ { "uri": uri, "mimeType": "text/plain", "text": text } ] }),
@@ -137,7 +184,23 @@ impl Server {
     /// Dispatch a tool call. Session/write tools use server state; everything
     /// else delegates to the stateless `call_tool`.
     fn dispatch_tool(&mut self, name: &str, args: &Value) -> Result<String, String> {
+        // Resolve relative path arguments against the working directory up front,
+        // so every tool (and `call_tool`) sees absolute paths.
+        let args = &self.resolve_path_args(args);
         match name {
+            "get_working_dir" => Ok(json!({ "cwd": self.cwd.display().to_string() }).to_string()),
+            "set_working_dir" => {
+                // `path` is already resolved against the current cwd above, so a
+                // relative arg like "samples" works as `cd`.
+                let path = str_arg(args, "path")?;
+                let meta = std::fs::metadata(path)
+                    .map_err(|e| format!("set_working_dir '{path}': {e}"))?;
+                if !meta.is_dir() {
+                    return Err(format!("not a directory: {path}"));
+                }
+                self.cwd = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+                Ok(json!({ "cwd": self.cwd.display().to_string() }).to_string())
+            }
             "open" => {
                 let path = str_arg(args, "path")?;
                 let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
@@ -251,9 +314,7 @@ impl Server {
                 let bytes = std::fs::read(patch_path).map_err(|e| format!("read patch: {e}"))?;
                 let writes = patch::parse_ips(&bytes)?;
                 let mut doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
-                for w in &writes {
-                    doc.overwrite(w.offset, &w.data);
-                }
+                patch::apply_writes(&mut doc, &writes);
                 doc.save_to(path).map_err(|e| format!("save failed: {e}"))?;
                 Ok(json!({ "records": writes.len() }).to_string())
             }
@@ -518,17 +579,21 @@ fn resource_templates_list() -> Value {
         {
             "uriTemplate": "file://{path}",
             "name": "raw file (hex dump)",
-            "description": "Read any file by absolute path as a hex dump, e.g. file:///tmp/x.bin",
+            "description": "Read a file as a hex dump — absolute (file:///tmp/x.bin) or relative to the working directory (file://x.bin).",
             "mimeType": "text/plain"
         }
     ])
 }
 
-fn read_resource(uri: &str) -> Result<String, String> {
-    // file:///abs/path -> hex dump (capped)
+fn read_resource(uri: &str, cwd: &Path) -> Result<String, String> {
+    // file://path -> hex dump (capped). A relative path resolves against cwd.
     if let Some(rest) = uri.strip_prefix("file://") {
-        let path = rest;
-        let doc = Document::open_file(path).map_err(|e| format!("open failed: {e}"))?;
+        let path = if Path::new(rest).is_absolute() {
+            PathBuf::from(rest)
+        } else {
+            cwd.join(rest)
+        };
+        let doc = Document::open_file(&path).map_err(|e| format!("open failed: {e}"))?;
         let len = doc.len().min(64 * 1024);
         return Ok(export::export(&doc, 0, len, export::Format::PlainHexDump));
     }
@@ -611,7 +676,7 @@ fn error_response(id: &Value, code: i64, message: &str) -> Value {
 // ---- tool definitions ----
 
 fn path_schema(extra: Value) -> Value {
-    let mut props = json!({ "path": { "type": "string", "description": "file or device path" } });
+    let mut props = json!({ "path": { "type": "string", "description": "file or device path (absolute, or relative to the working directory — see get_working_dir/set_working_dir)" } });
     if let (Some(p), Some(e)) = (props.as_object_mut(), extra.as_object()) {
         for (k, v) in e {
             p.insert(k.clone(), v.clone());
@@ -748,6 +813,13 @@ fn tools_list() -> Value {
             "session": {"type":"integer"}, "path": {"type":"string"} } }) },
         { "name": "session_close", "description": "Close an editing session.",
           "inputSchema": json!({ "type":"object", "required":["session"], "properties": { "session": {"type":"integer"} } }) },
+
+        // ---- workspace ----
+        { "name": "get_working_dir", "description": "Return the current working directory that relative path arguments resolve against.",
+          "inputSchema": json!({ "type":"object", "properties": {} }) },
+        { "name": "set_working_dir", "description": "Set the working directory (like 'cd'); relative path arguments resolve against it afterward. Absolute paths always work regardless.",
+          "inputSchema": json!({ "type":"object", "required":["path"], "properties": {
+            "path": {"type":"string","description":"directory (absolute, or relative to the current working directory)"} } }) },
     ])
 }
 
@@ -1439,5 +1511,71 @@ mod tests {
         for f in [orig, modi, patch, target] {
             let _ = std::fs::remove_file(&f);
         }
+    }
+
+    fn tmpdir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static C: AtomicU64 = AtomicU64::new(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "bewitched_mcpdir_{:?}_{}",
+            std::thread::current().id(),
+            C.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn working_dir_resolves_relative_paths() {
+        let dir = tmpdir();
+        std::fs::write(dir.join("sample.bin"), b"ABCD").unwrap();
+        let mut s = Server::new();
+
+        // get_working_dir reports a directory by default.
+        assert!(call(&mut s, "get_working_dir", json!({}))["cwd"].as_str().is_some());
+
+        // cd into the temp dir.
+        let set = call(&mut s, "set_working_dir", json!({ "path": dir.to_str().unwrap() }));
+        assert!(set["cwd"].as_str().is_some());
+
+        // A RELATIVE path now resolves against the working dir, identically to the
+        // absolute path — proving relative resolution works while absolute still
+        // works "wild" regardless of cwd.
+        let rel = call(&mut s, "read_hex", json!({ "path": "sample.bin", "length": 4 }));
+        let abs = call(
+            &mut s,
+            "read_hex",
+            json!({ "path": dir.join("sample.bin").to_str().unwrap(), "length": 4 }),
+        );
+        assert_eq!(rel, abs);
+        assert!(rel.as_str().unwrap().contains("41")); // 'A' — a real dump, not an error
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_working_dir_rejects_non_directory() {
+        let p = tmpfile(b"x");
+        let mut s = Server::new();
+        let resp = s
+            .handle(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":"set_working_dir","arguments":{"path": p.to_str().unwrap()}}}))
+            .unwrap();
+        assert_eq!(resp["result"]["isError"], json!(true));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn set_working_dir_then_relative_missing_file_errors() {
+        let dir = tmpdir();
+        let mut s = Server::new();
+        call(&mut s, "set_working_dir", json!({ "path": dir.to_str().unwrap() }));
+        let resp = s
+            .handle(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":"read_hex","arguments":{"path":"nope.bin"}}}))
+            .unwrap();
+        assert_eq!(resp["result"]["isError"], json!(true));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

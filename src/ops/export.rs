@@ -137,7 +137,7 @@ impl Format {
 }
 
 fn collect(doc: &dyn ByteReader, offset: u64, len: u64) -> Vec<u8> {
-    let end = (offset + len).min(doc.len());
+    let end = offset.saturating_add(len).min(doc.len());
     doc.read_range(offset, (end.saturating_sub(offset)) as usize)
 }
 
@@ -442,6 +442,13 @@ mod tests {
 
     fn d(b: &[u8]) -> Document {
         Document::from_source(Arc::new(MemSource::new(b.to_vec(), "t")))
+    }
+
+    #[test]
+    fn export_offset_len_overflow_is_safe() {
+        // `offset + len` overflowing u64 in `collect` must not panic.
+        let doc = d(b"abcd");
+        let _ = export(&doc, u64::MAX - 1, u64::MAX, Format::PlainHexDump);
     }
 
     #[test]

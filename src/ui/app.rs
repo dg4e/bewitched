@@ -416,6 +416,9 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, startup: Option<PathBuf>) -> Self {
         theme::install(&cc.egui_ctx);
+        // Route the macOS Apple-menu "About bewitched" to our in-app about window.
+        #[cfg(target_os = "macos")]
+        super::macos::install(&cc.egui_ctx);
         let (doc, status) = match startup {
             Some(p) => match Document::open_file(&p) {
                 Ok(d) => {
@@ -551,6 +554,38 @@ impl App {
         self.process_target = None;
         self.frozen.clear();
         self.scroll_to_cursor = true;
+        self.clear_analysis();
+    }
+
+    /// Discard results held by the analysis/tool windows (statistics, signatures,
+    /// strings, scan, checksums, templates, …) so stale output from the previous
+    /// document never lingers after a new file/process is loaded. Window
+    /// open/closed state and user-entered configuration are preserved; only the
+    /// computed-from-the-old-document results are cleared.
+    fn clear_analysis(&mut self) {
+        self.checksum.results.clear();
+        self.checksum.crc_result.clear();
+        self.stats.result = None;
+        self.stats.emap.clear();
+        self.signatures.results.clear();
+        self.strings.results.clear();
+        self.byteplot.texture = None;
+        self.diff.ranges.clear();
+        self.diff.status.clear();
+        self.scan.matches.clear();
+        self.scan.status.clear();
+        self.ptrscan.results.clear();
+        self.ptrscan.status.clear();
+        self.template.fields.clear();
+        self.template.status.clear();
+        self.template.edit_idx = None;
+        self.template.edit_buf.clear();
+        self.kstruct.tree = None;
+        self.kstruct.status.clear();
+        self.export.preview.clear();
+        self.script.output.clear();
+        self.search.status.clear();
+        self.goto.status.clear();
     }
 
     /// Re-poke every frozen value into the target process. Called each frame.
@@ -1009,9 +1044,7 @@ impl App {
         };
         match patch::parse_ips(&bytes) {
             Ok(writes) => {
-                for w in &writes {
-                    self.doc.overwrite(w.offset, &w.data);
-                }
+                patch::apply_writes(&mut self.doc, &writes);
                 self.status = format!("applied IPS patch ({} record(s))", writes.len());
                 self.scroll_to_cursor = true;
             }
@@ -1340,11 +1373,23 @@ impl App {
     /// "print" by rendering an HTML hex dump and handing it to the OS default
     /// handler (typically the browser, which can print). Cross-platform.
     fn print(&mut self) {
+        use std::io::Write as _;
+        static PRINT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let (off, len) = self.scope(true);
         let body = export::export(&self.doc, off, len, export::Format::Html);
+        // Unique, per-process name + O_EXCL create: on a shared /tmp this avoids
+        // both filename collisions and the symlink-precreation attack a fixed,
+        // predictable name (e.g. `bewitched_print_<label>.html`) would allow.
+        let seq = PRINT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let label = self.doc.label().replace(['/', '\\'], "_");
         let mut path = std::env::temp_dir();
-        path.push(format!("bewitched_print_{}.html", self.doc.label().replace('/', "_")));
-        match std::fs::write(&path, body.as_bytes()) {
+        path.push(format!("bewitched_print_{}_{}_{}.html", std::process::id(), seq, label));
+        let write_res = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .and_then(|mut f| f.write_all(body.as_bytes()));
+        match write_res {
             Ok(()) => {
                 if let Err(e) = open_in_default_app(&path) {
                     self.status = format!("print: wrote {} ({e})", path.display());

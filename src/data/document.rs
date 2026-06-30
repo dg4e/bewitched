@@ -155,9 +155,13 @@ impl Document {
         }
     }
 
-    /// Convenience: allocate and read a range. Caps absurd requests.
+    /// Convenience: allocate and read a range. The allocation is capped to the
+    /// bytes actually available from `offset` — reading past the end returns
+    /// nothing, so a huge `len` (from a crafted length field, or an untrusted
+    /// MCP/template/CLI argument) cannot drive a multi-gigabyte allocation.
     pub fn read_range(&self, offset: u64, len: usize) -> Vec<u8> {
-        let mut v = vec![0u8; len];
+        let avail = self.total.saturating_sub(offset).min(len as u64) as usize;
+        let mut v = vec![0u8; avail];
         let n = self.read_at(offset, &mut v);
         v.truncate(n);
         v
@@ -347,10 +351,6 @@ impl Document {
         self.mark_saved();
         Ok(())
     }
-
-    pub fn piece_count(&self) -> usize {
-        self.pieces.len()
-    }
 }
 
 // ---- shared read internals (used by Document and DocReader) ----
@@ -430,7 +430,11 @@ pub trait ByteReader: Send + Sync {
         self.len() == 0
     }
     fn read_range(&self, offset: u64, len: usize) -> Vec<u8> {
-        let mut v = vec![0u8; len];
+        // Cap the allocation to the bytes actually available (see the inherent
+        // `Document::read_range` for rationale): an untrusted `len` must not be
+        // able to force an arbitrarily large allocation.
+        let avail = self.len().saturating_sub(offset).min(len as u64) as usize;
+        let mut v = vec![0u8; avail];
         let n = self.read_at(offset, &mut v);
         v.truncate(n);
         v
@@ -669,5 +673,21 @@ mod tests {
         // offset and del_len past end are clamped, not panicking
         d.replace(100, 50, b"XY");
         assert_eq!(all(&d), b"abcXY");
+    }
+
+    #[test]
+    fn read_range_caps_oversized_len() {
+        let d = doc_with(b"abcd");
+        // A `usize::MAX` len must neither allocate astronomically nor panic; only
+        // the bytes actually present are returned. (Regression: the old code did
+        // `vec![0u8; len]` despite a comment claiming it capped — a DoS vector
+        // reachable from MCP/template length fields.)
+        assert_eq!(d.read_range(0, usize::MAX), b"abcd");
+        assert_eq!(d.read_range(2, usize::MAX), b"cd");
+        assert!(d.read_range(100, usize::MAX).is_empty());
+        // The thread-safe snapshot reader caps identically.
+        let r = d.reader();
+        assert_eq!(ByteReader::read_range(&r, 0, usize::MAX), b"abcd");
+        assert!(ByteReader::read_range(&r, 4, usize::MAX).is_empty());
     }
 }

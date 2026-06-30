@@ -166,12 +166,17 @@ mod imp {
             if data.is_empty() {
                 return Ok(0);
             }
+            // mach_vm_write's count is a 32-bit `mach_msg_type_number_t`; reject
+            // an oversized write rather than silently truncating `len` (which
+            // would then wrongly report a full write).
+            let len = u32::try_from(data.len())
+                .map_err(|_| io::Error::other("write too large for mach_vm_write"))?;
             let kr = unsafe {
                 mach_vm_write(
                     self.task,
                     addr as mach_vm_address_t,
                     data.as_ptr() as mach2::vm_types::vm_offset_t,
-                    data.len() as u32,
+                    len,
                 )
             };
             if kr != KERN_SUCCESS {

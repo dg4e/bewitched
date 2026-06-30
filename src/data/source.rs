@@ -106,7 +106,7 @@ impl FileSource {
     pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
         let path = path.as_ref();
         let file = File::open(path)?;
-        let len = file.metadata()?.len();
+        let mut len = file.metadata()?.len();
         let label = path
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -115,6 +115,13 @@ impl FileSource {
         // Empty files cannot be mapped; everything else we try to map and only
         // fall back to seek-based reads if the OS refuses (e.g. some devices).
         let backing = if len == 0 {
+            // `stat` reports length 0 for raw block/character devices on every
+            // platform, so a real disk would otherwise open as an empty source.
+            // Ask the OS for the true device size; if that succeeds it's a device
+            // (read it positionally — devices generally can't be mmap'd whole).
+            if let Some(dev_len) = device_size(&file) {
+                len = dev_len;
+            }
             Backing::Seek(Mutex::new(file))
         } else {
             match unsafe { Mmap::map(&file) } {
@@ -129,6 +136,77 @@ impl FileSource {
             label,
         })
     }
+}
+
+/// Query the byte size of a raw block/character device, or `None` for a regular
+/// file (where `stat` already gave the size and the ioctl fails with `ENOTTY`).
+#[cfg(target_os = "linux")]
+fn device_size(file: &File) -> Option<u64> {
+    use std::os::raw::{c_int, c_ulong};
+    use std::os::unix::io::AsRawFd;
+    // BLKGETSIZE64: _IOR(0x12, 114, size_t) on 64-bit Linux — returns bytes.
+    const BLKGETSIZE64: c_ulong = 0x8008_1272;
+    // `ioctl` is variadic; declaring the data arg through `...` is required so
+    // it's passed per the platform's variadic ABI (on AArch64 that's the stack,
+    // not a register — a fixed-param declaration silently corrupts the pointer).
+    extern "C" {
+        fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+    }
+    let mut size: u64 = 0;
+    let rc = unsafe { ioctl(file.as_raw_fd(), BLKGETSIZE64, &mut size as *mut u64) };
+    (rc == 0 && size > 0).then_some(size)
+}
+
+/// macOS raw disks (`/dev/rdiskN`) report size as block-size × block-count.
+#[cfg(target_os = "macos")]
+fn device_size(file: &File) -> Option<u64> {
+    use std::os::raw::{c_int, c_ulong};
+    use std::os::unix::io::AsRawFd;
+    // From <sys/disk.h>: _IOR('d', 24, u32) and _IOR('d', 25, u64).
+    const DKIOCGETBLOCKSIZE: c_ulong = 0x4004_6418;
+    const DKIOCGETBLOCKCOUNT: c_ulong = 0x4008_6419;
+    // `ioctl` is variadic; the data arg must go through `...` so it follows the
+    // platform variadic ABI (Apple-Silicon passes it on the stack, not x2).
+    extern "C" {
+        fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
+    }
+    let fd = file.as_raw_fd();
+    let mut bsize: u32 = 0;
+    let mut bcount: u64 = 0;
+    let r1 = unsafe { ioctl(fd, DKIOCGETBLOCKSIZE, &mut bsize as *mut u32) };
+    let r2 = unsafe { ioctl(fd, DKIOCGETBLOCKCOUNT, &mut bcount as *mut u64) };
+    (r1 == 0 && r2 == 0 && bsize > 0 && bcount > 0).then_some(bsize as u64 * bcount)
+}
+
+/// Windows physical drives/volumes (`\\.\PhysicalDrive0`, `\\.\C:`) report size
+/// via `IOCTL_DISK_GET_LENGTH_INFO`.
+#[cfg(target_os = "windows")]
+fn device_size(file: &File) -> Option<u64> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    // CTL_CODE(IOCTL_DISK_BASE=0x7, 0x17, METHOD_BUFFERED, FILE_READ_ACCESS).
+    const IOCTL_DISK_GET_LENGTH_INFO: u32 = 0x0007_405C;
+    let mut length: i64 = 0;
+    let mut returned: u32 = 0;
+    let ok = unsafe {
+        DeviceIoControl(
+            file.as_raw_handle() as _,
+            IOCTL_DISK_GET_LENGTH_INFO,
+            core::ptr::null(),
+            0,
+            &mut length as *mut i64 as *mut _,
+            core::mem::size_of::<i64>() as u32,
+            &mut returned,
+            core::ptr::null_mut(),
+        )
+    };
+    (ok != 0 && length > 0).then_some(length as u64)
+}
+
+/// Other platforms: no device-size probe; `stat` length is used as-is.
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn device_size(_file: &File) -> Option<u64> {
+    None
 }
 
 impl DataSource for FileSource {

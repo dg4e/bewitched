@@ -18,6 +18,12 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_bg(ctx);
 
+        // The macOS Apple-menu "About bewitched" routes here (see ui::macos).
+        #[cfg(target_os = "macos")]
+        if super::macos::take_about_requested() {
+            self.about_open = true;
+        }
+
         // Keep frozen live-memory values pinned.
         if !self.frozen.is_empty() && self.process_target.is_some() {
             self.enforce_frozen();

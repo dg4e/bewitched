@@ -148,7 +148,7 @@ pub fn compute(
     algos: &[Algo],
     progress: &Progress,
 ) -> Vec<(Algo, String)> {
-    let end = (offset + len).min(doc.len());
+    let end = offset.saturating_add(len).min(doc.len());
     progress.set_total(end.saturating_sub(offset));
     let mut engines: Vec<Engine> = algos.iter().map(|a| Engine::new(*a)).collect();
     let mut pos = offset;
@@ -227,6 +227,15 @@ mod tests {
     use super::*;
     use crate::data::{Document, MemSource};
     use std::sync::Arc;
+
+    #[test]
+    fn compute_offset_len_overflow_is_safe() {
+        // `offset + len` overflowing u64 must not panic; an out-of-range window
+        // produces the empty-input digest rather than crashing.
+        let doc = Document::from_source(Arc::new(MemSource::new(vec![0u8; 16], "t")));
+        let r = compute(&doc, u64::MAX - 1, u64::MAX, &[Algo::Crc32], &Progress::default());
+        assert_eq!(r.len(), 1);
+    }
 
     #[test]
     fn custom_crc_known_vectors() {

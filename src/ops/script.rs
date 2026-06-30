@@ -86,6 +86,11 @@ pub fn run_with_ctx(
     let regions: Rc<RefCell<Vec<(u64, u64, String)>>> = Rc::new(RefCell::new(Vec::new()));
     let notes: Rc<RefCell<Vec<(u64, u64, String)>>> = Rc::new(RefCell::new(Vec::new()));
 
+    // Upper bound on the script's working buffer. Rhai's `set_max_array_size` /
+    // `set_max_string_size` only bound *Rhai's own* arrays/strings, NOT our
+    // custom `Vec<u8>`, so without this an `resize(huge, 0)` would OOM/abort.
+    const MAX_BUF: usize = 256 * 1024 * 1024;
+
     let mut engine = Engine::new();
     engine.set_max_operations(50_000_000);
     engine.set_max_call_levels(64);
@@ -115,14 +120,19 @@ pub fn run_with_ctx(
     }
     {
         let b = buf.clone();
-        engine.register_fn("push", move |v: i64| b.borrow_mut().push(v as u8));
+        engine.register_fn("push", move |v: i64| {
+            let mut bb = b.borrow_mut();
+            if bb.len() < MAX_BUF {
+                bb.push(v as u8);
+            }
+        });
     }
     {
         let b = buf.clone();
         engine.register_fn("fill", move |start: i64, count: i64, v: i64| {
             let mut bb = b.borrow_mut();
             let s = (start.max(0) as usize).min(bb.len());
-            let e = ((start + count).max(0) as usize).min(bb.len());
+            let e = (start.saturating_add(count).max(0) as usize).min(bb.len());
             for x in bb[s..e].iter_mut() {
                 *x = v as u8;
             }
@@ -131,13 +141,17 @@ pub fn run_with_ctx(
     {
         let b = buf.clone();
         engine.register_fn("resize", move |n: i64, v: i64| {
-            b.borrow_mut().resize(n.max(0) as usize, v as u8)
+            let n = (n.max(0) as usize).min(MAX_BUF);
+            b.borrow_mut().resize(n, v as u8)
         });
     }
     {
         let b = buf.clone();
         engine.register_fn("insert", move |i: i64, v: i64| {
             let mut bb = b.borrow_mut();
+            if bb.len() >= MAX_BUF {
+                return;
+            }
             let idx = (i.max(0) as usize).min(bb.len());
             bb.insert(idx, v as u8);
         });
@@ -147,7 +161,7 @@ pub fn run_with_ctx(
         engine.register_fn("remove", move |i: i64, n: i64| {
             let mut bb = b.borrow_mut();
             let start = (i.max(0) as usize).min(bb.len());
-            let end = (start + n.max(0) as usize).min(bb.len());
+            let end = start.saturating_add(n.max(0) as usize).min(bb.len());
             bb.drain(start..end);
         });
     }
@@ -550,5 +564,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.trim(), "15");
+    }
+
+    #[test]
+    fn resize_growth_is_capped() {
+        // A huge resize must clamp to MAX_BUF rather than OOM/abort the process.
+        let mut data = vec![0u8; 4];
+        assert!(run("resize(999999999999, 0);", &mut data).is_ok());
+        assert_eq!(data.len(), 256 * 1024 * 1024);
+    }
+
+    #[test]
+    fn fill_and_remove_survive_overflowing_args() {
+        // start+count / start+n must not overflow-panic on absurd arguments.
+        let mut data = vec![1u8; 8];
+        assert!(run("fill(0, 99999999999999, 7);", &mut data).is_ok());
+        assert_eq!(data, vec![7u8; 8]);
+        let mut data2 = vec![1u8; 8];
+        assert!(run("remove(0, 99999999999999);", &mut data2).is_ok());
+        assert!(data2.is_empty());
+    }
+
+    #[test]
+    fn cannot_reach_filesystem_or_os() {
+        // The sandbox registers only the byte-buffer API; OS/file builtins are
+        // absent, so any such call is a compile/runtime error, never an escape.
+        let mut data = vec![0u8; 1];
+        assert!(run("open_file(\"/etc/passwd\");", &mut data).is_err());
+        assert!(run("system(\"id\");", &mut data).is_err());
     }
 }

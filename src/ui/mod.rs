@@ -4,6 +4,8 @@ mod app;
 mod charset;
 mod hexview;
 pub mod icon;
+#[cfg(target_os = "macos")]
+mod macos;
 mod theme;
 
 use app::App;
@@ -39,7 +41,7 @@ pub fn run() -> eframe::Result<()> {
     }
 
     let (rgba, iw, ih) = icon::rgba(8);
-    let title = format!("bewitched {}", env!("CARGO_PKG_VERSION"));
+    let title = format!("bewitched v{}", env!("CARGO_PKG_VERSION"));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 720.0])

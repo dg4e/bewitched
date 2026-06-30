@@ -115,6 +115,15 @@ pub fn apply_to_vec(target: &mut Vec<u8>, writes: &[IpsWrite]) {
     }
 }
 
+/// Apply patch writes to a live [`Document`] via `overwrite` (undoable; the
+/// document extends when a record runs past the end). Shared by the GUI and the
+/// MCP server so the apply loop isn't duplicated per front-end.
+pub fn apply_writes(doc: &mut crate::data::Document, writes: &[IpsWrite]) {
+    for w in writes {
+        doc.overwrite(w.offset, &w.data);
+    }
+}
+
 // ============================== BPS ========================================
 //
 // BPS is the modern successor to IPS: it handles files of any size, and embeds
@@ -147,16 +156,21 @@ fn bps_encode_varint(out: &mut Vec<u8>, mut n: u64) {
 
 fn bps_decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
     let mut result = 0u64;
-    let mut shift = 0u64;
+    let mut shift = 0u32;
     loop {
         let b = *data.get(*pos).ok_or("truncated varint")?;
         *pos += 1;
-        result += ((b & 0x7f) as u64) << shift;
+        // `checked_shl` rejects shifts >= 64, and `checked_add` rejects
+        // accumulation overflow, so a malformed all-continuation varint can
+        // neither panic (debug) nor silently wrap (release).
+        let add = ((b & 0x7f) as u64).checked_shl(shift).ok_or("varint too long")?;
+        result = result.checked_add(add).ok_or("varint overflow")?;
         if b & 0x80 != 0 {
             return Ok(result);
         }
         shift += 7;
-        result += 1u64 << shift;
+        let one = 1u64.checked_shl(shift).ok_or("varint too long")?;
+        result = result.checked_add(one).ok_or("varint overflow")?;
     }
 }
 
@@ -200,9 +214,17 @@ pub fn apply_bps(patch: &[u8], source: &[u8]) -> Result<Vec<u8>, String> {
     let _source_size = bps_decode_varint(patch, &mut pos)?;
     let target_size = bps_decode_varint(patch, &mut pos)? as usize;
     let meta_size = bps_decode_varint(patch, &mut pos)? as usize;
-    pos += meta_size;
+    pos = pos.checked_add(meta_size).ok_or("metadata size overflow")?;
+    if pos > body_end {
+        return Err("metadata exceeds patch".into());
+    }
 
-    let mut out = Vec::with_capacity(target_size);
+    // Do NOT pre-reserve `target_size` bytes: it is an untrusted header field, so
+    // a crafted patch could request a giant allocation (abort/DoS). Cap the
+    // reservation; the vector still grows as actions append real data, and the
+    // final length is verified against `target_size` below.
+    const MAX_PREALLOC: usize = 64 << 20; // 64 MiB
+    let mut out = Vec::with_capacity(target_size.min(MAX_PREALLOC));
     let mut source_rel: i64 = 0;
     let mut target_rel: i64 = 0;
 
@@ -348,6 +370,47 @@ mod tests {
             assert_eq!(bps_decode_varint(&buf, &mut pos).unwrap(), n, "varint {n}");
             assert_eq!(pos, buf.len());
         }
+    }
+
+    #[test]
+    fn bps_varint_rejects_malformed() {
+        // All-continuation bytes (0x00 never sets the 0x80 terminator) must error
+        // out rather than overflow the shift (debug panic) or wrap (release).
+        let data = vec![0u8; 32];
+        let mut pos = 0;
+        assert!(bps_decode_varint(&data, &mut pos).is_err());
+    }
+
+    #[test]
+    fn bps_apply_rejects_huge_target_size_without_oom() {
+        // A crafted patch declaring an astronomical target_size must NOT drive a
+        // giant `Vec::with_capacity` (abort/DoS); it should fail validation.
+        let source: &[u8] = b"";
+        let mut p = Vec::from(*b"BPS1");
+        bps_encode_varint(&mut p, 0); // source size
+        bps_encode_varint(&mut p, u64::MAX / 2); // absurd target size
+        bps_encode_varint(&mut p, 0); // metadata size
+        for v in [crc32(source), 0u32] {
+            p.extend_from_slice(&v.to_le_bytes());
+        }
+        let pc = crc32(&p);
+        p.extend_from_slice(&pc.to_le_bytes());
+        assert!(apply_bps(&p, source).is_err());
+    }
+
+    #[test]
+    fn bps_apply_rejects_oversized_metadata() {
+        let source: &[u8] = b"";
+        let mut p = Vec::from(*b"BPS1");
+        bps_encode_varint(&mut p, 0);
+        bps_encode_varint(&mut p, 0);
+        bps_encode_varint(&mut p, u64::MAX / 2); // metadata larger than the patch
+        for v in [crc32(source), 0u32] {
+            p.extend_from_slice(&v.to_le_bytes());
+        }
+        let pc = crc32(&p);
+        p.extend_from_slice(&pc.to_le_bytes());
+        assert!(apply_bps(&p, source).is_err());
     }
 
     #[test]

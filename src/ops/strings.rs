@@ -32,7 +32,7 @@ pub fn extract(
     max_results: usize,
     progress: &Progress,
 ) -> Vec<Found> {
-    let end = (offset + len).min(doc.len());
+    let end = offset.saturating_add(len).min(doc.len());
     progress.set_total(end.saturating_sub(offset));
     let mut out = Vec::new();
 
@@ -133,6 +133,14 @@ mod tests {
 
     fn doc(b: &[u8]) -> Document {
         Document::from_source(Arc::new(MemSource::new(b.to_vec(), "t")))
+    }
+
+    #[test]
+    fn extract_offset_len_overflow_is_safe() {
+        // `offset + len` overflowing u64 must not panic; nothing is in range.
+        let d = doc(b"hello world");
+        let found = extract(&d, u64::MAX - 1, u64::MAX, 3, 100, &Progress::default());
+        assert!(found.is_empty());
     }
 
     #[test]

@@ -107,14 +107,7 @@ pub struct Field {
     pub edit: EditKind,
 }
 
-fn parse_int_lit(s: &str) -> Option<i128> {
-    let s = s.trim();
-    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        i128::from_str_radix(h, 16).ok()
-    } else {
-        s.parse::<i128>().ok()
-    }
-}
+use super::parse_int_lit;
 
 /// Encode an edited field value back into bytes per its [`EditKind`].
 pub fn encode(kind: &EditKind, input: &str) -> Result<Vec<u8>, String> {
@@ -305,7 +298,9 @@ pub fn apply(tmpl: &Template, reader: &dyn ByteReader, start: u64) -> Result<Vec
                 });
                 pos += m.len() as u64;
             }
-            Stmt::Skip(c) => pos += resolve(c, &vals)?,
+            // `skip` advances without reading, so a huge count could overflow
+            // `pos`; saturate (a past-EOF cursor just makes later reads fail).
+            Stmt::Skip(c) => pos = pos.saturating_add(resolve(c, &vals)?),
             Stmt::Num { ty, name } => {
                 let w = ty.width();
                 let raw = read(pos, w)?;
@@ -458,6 +453,15 @@ mod tests {
         assert_eq!(field(&f, "width").value, "2");
         assert_eq!(field(&f, "bpp").value, "24");
         assert_eq!(field(&f, "bpp").offset, data.len() as u64 - 2);
+    }
+
+    #[test]
+    fn skip_huge_count_saturates_not_panics() {
+        // `skip` advances without reading; a u64-overflowing count must saturate
+        // (then the next read fails cleanly) rather than panic.
+        let tmpl = Template::parse("skip 0xffffffffffffffff\nu8 x\n").unwrap();
+        let r = apply(&tmpl, &doc(&[1, 2, 3, 4]), 0);
+        assert!(r.is_err());
     }
 
     #[test]

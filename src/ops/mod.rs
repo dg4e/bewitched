@@ -38,6 +38,19 @@ pub fn parse_u64(s: &str) -> Option<u64> {
     }
 }
 
+/// Parse a `0x`-prefixed hex or plain decimal *signed* integer literal (as used
+/// in template/struct DSL field values and enum entries). Whitespace is trimmed.
+/// Widened to `i128` so it covers the full `u64`/`i64` literal range; callers
+/// narrow as needed.
+pub fn parse_int_lit(s: &str) -> Option<i128> {
+    let s = s.trim();
+    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        i128::from_str_radix(h, 16).ok()
+    } else {
+        s.parse().ok()
+    }
+}
+
 /// Cooperative progress/cancel handle shared with long-running operations.
 #[derive(Clone)]
 pub struct Progress {

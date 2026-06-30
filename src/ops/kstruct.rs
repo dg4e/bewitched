@@ -233,7 +233,8 @@ fn eval(e: &Expr, scope: &Scope) -> Result<i64, String> {
         Expr::Unary(op, x) => {
             let v = eval(x, scope)?;
             match op {
-                '-' => -v,
+                // wrapping_neg so `-i64::MIN` (from a crafted field value) can't panic
+                '-' => v.wrapping_neg(),
                 '~' => !v,
                 '!' => (v == 0) as i64,
                 _ => return Err("bad unary".into()),
@@ -242,27 +243,40 @@ fn eval(e: &Expr, scope: &Scope) -> Result<i64, String> {
         Expr::Bin(op, a, b) => {
             let l = eval(a, scope)?;
             let r = eval(b, scope)?;
+            // Operands can be file-derived (a u64 field cast to i64), so all
+            // arithmetic must be panic-free: wrapping for +/-/*, checked div/rem
+            // (guards `i64::MIN / -1`), and bounded shift amounts.
             match op.as_str() {
-                "+" => l + r,
-                "-" => l - r,
-                "*" => l * r,
+                "+" => l.wrapping_add(r),
+                "-" => l.wrapping_sub(r),
+                "*" => l.wrapping_mul(r),
                 "/" => {
                     if r == 0 {
                         return Err("divide by zero".into());
                     }
-                    l / r
+                    l.checked_div(r).ok_or("integer overflow in '/'")?
                 }
                 "%" => {
                     if r == 0 {
                         return Err("modulo by zero".into());
                     }
-                    l % r
+                    l.checked_rem(r).ok_or("integer overflow in '%'")?
                 }
                 "&" => l & r,
                 "|" => l | r,
                 "^" => l ^ r,
-                "<<" => l << r,
-                ">>" => l >> r,
+                "<<" => {
+                    if !(0..64).contains(&r) {
+                        return Err("shift amount out of range".into());
+                    }
+                    l.wrapping_shl(r as u32)
+                }
+                ">>" => {
+                    if !(0..64).contains(&r) {
+                        return Err("shift amount out of range".into());
+                    }
+                    l.wrapping_shr(r as u32)
+                }
                 "==" => (l == r) as i64,
                 "!=" => (l != r) as i64,
                 "<" => (l < r) as i64,
@@ -369,7 +383,13 @@ fn scalar_type(tok: &str) -> Option<FieldType> {
     } else {
         (tok, None)
     };
-    let width = |c: &str| c.parse::<usize>().ok().map(|bits| bits / 8);
+    // Width in bytes, restricted to whole-byte widths that fit a u64. This
+    // rejects malformed widths like `u0`, `u9`, or `s128` whose downstream
+    // shift (`64 - w*8`) and reads would otherwise underflow / truncate.
+    let width = |c: &str| -> Option<usize> {
+        let bits: usize = c.parse().ok()?;
+        (bits != 0 && bits % 8 == 0 && bits <= 64).then_some(bits / 8)
+    };
     if base.len() < 2 {
         return None;
     }
@@ -378,7 +398,8 @@ fn scalar_type(tok: &str) -> Option<FieldType> {
     match prefix {
         "u" => Some(FieldType::U(w, endian)),
         "s" => Some(FieldType::S(w, endian)),
-        "f" => Some(FieldType::F(w, endian)),
+        // floats only exist at 32/64 bits
+        "f" if w == 4 || w == 8 => Some(FieldType::F(w, endian)),
         _ => None,
     }
 }
@@ -522,7 +543,9 @@ impl Schema {
                         let mut it = bl.splitn(2, char::is_whitespace);
                         let num = it.next().unwrap_or("");
                         let label = it.next().unwrap_or("").trim();
-                        let n = parse_int_lit(num).ok_or_else(|| format!("line {ln}: bad enum value '{num}'"))?;
+                        let n = super::parse_int_lit(num)
+                            .and_then(|v| i64::try_from(v).ok())
+                            .ok_or_else(|| format!("line {ln}: bad enum value '{num}'"))?;
                         map.insert(n, label.to_string());
                     }
                     schema.enums.insert(name.to_string(), map);
@@ -536,15 +559,6 @@ impl Schema {
             return Err("schema has no 'seq:' block".into());
         }
         Ok(schema)
-    }
-}
-
-fn parse_int_lit(s: &str) -> Option<i64> {
-    let s = s.trim();
-    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        i64::from_str_radix(h, 16).ok()
-    } else {
-        s.parse().ok()
     }
 }
 
@@ -882,6 +896,48 @@ mod tests {
         let s = Scope::new();
         assert!(eval(&parse_expr("missing").unwrap(), &s).is_err());
         assert!(eval(&parse_expr("1 / 0").unwrap(), &s).is_err());
+    }
+
+    #[test]
+    fn expr_is_panic_free_on_adversarial_operands() {
+        // Operands can be file-derived (a u64 field as i64), so every arithmetic
+        // path must avoid panics in BOTH debug and release.
+        let mut s = Scope::new();
+        s.set("min", i64::MIN);
+        s.set("max", i64::MAX);
+        let ev = |src: &str, sc: &Scope| eval(&parse_expr(src).unwrap(), sc);
+        // i64::MIN / -1 and % -1 overflow — must be a clean error, not a panic.
+        assert!(ev("min / -1", &s).is_err());
+        assert!(ev("min % -1", &s).is_err());
+        // Shift counts outside 0..64 are rejected, not masked/UB.
+        assert!(ev("1 << 64", &s).is_err());
+        assert!(ev("1 << -1", &s).is_err());
+        assert!(ev("1 >> 64", &s).is_err());
+        // +,-,*, unary - wrap instead of panicking on overflow.
+        assert_eq!(ev("max + 1", &s).unwrap(), i64::MIN);
+        assert_eq!(ev("max * 2", &s).unwrap(), -2);
+        assert_eq!(ev("-min", &s).unwrap(), i64::MIN);
+    }
+
+    #[test]
+    fn rejects_oversized_scalar_widths() {
+        // `s128`/`u128` would underflow `64 - w*8`; `u0`/`f16` are nonsense.
+        assert!(Schema::parse("seq:\n  x s128\n").is_err());
+        assert!(Schema::parse("seq:\n  x u128\n").is_err());
+        assert!(Schema::parse("seq:\n  x u0\n").is_err());
+        assert!(Schema::parse("seq:\n  x f16\n").is_err());
+        // Valid whole-byte widths still parse.
+        assert!(Schema::parse("seq:\n  x u64\n").is_ok());
+        assert!(Schema::parse("seq:\n  x s8\n").is_ok());
+        assert!(Schema::parse("seq:\n  x f32\n").is_ok());
+    }
+
+    #[test]
+    fn divide_by_minus_one_via_file_value_does_not_panic() {
+        // x = i64::MIN read as u64, used in `x / -1` — end-to-end through apply.
+        let schema = Schema::parse("endian le\nseq:\n  x u64\n  y u8 if(x / -1)\n").unwrap();
+        let data = [0, 0, 0, 0, 0, 0, 0, 0x80, 0xAA]; // x = 0x8000_0000_0000_0000
+        assert!(apply(&schema, &doc(&data), 0).is_err());
     }
 
     // ---- structure parsing ----
