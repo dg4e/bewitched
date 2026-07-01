@@ -1,6 +1,6 @@
 [package]
 name = "bewitched"
-version = "0.1.0"
+version = "0.2.3"
 edition = "2021"
 description = "A fast, cross-platform, hacker-esque hex editor for files, disks and RAM"
 authors = ["realytcracker"]

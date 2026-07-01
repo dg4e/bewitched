@@ -1,3 +1,5 @@
 /target
 **/*.rs.bk
 *.bewitched.tmp
+# Personal design journal — kept locally, not tracked.
+JOURNAL.md
