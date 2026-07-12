@@ -321,9 +321,29 @@ impl Document {
     }
 
     /// Save by streaming the document to a path.
+    ///
+    /// Uses temp-file + atomic rename, which is only sound when the target is (or
+    /// will be) an ordinary regular file. If the target already exists as a raw
+    /// device (`/dev/rdiskN`), fifo, socket, etc., the rename would fail and leave
+    /// a stray `.bewitched.tmp` behind, so this refuses up front with a clear
+    /// error. Positioned device / live-process writes are handled elsewhere
+    /// (write-in-place), never here.
     pub fn save_to(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         use std::io::Write;
         let path = path.as_ref();
+
+        // Refuse to temp+rename over a non-regular target (raw device, fifo, ...).
+        match std::fs::metadata(path) {
+            Ok(meta) if !meta.file_type().is_file() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "save_to requires a regular-file-backed document; use \
+                     write-in-place for devices/process memory",
+                ));
+            }
+            _ => {}
+        }
+
         // Write to a temp file then rename, so a crash can't truncate the target.
         let tmp = path.with_extension("bewitched.tmp");
         {
@@ -659,6 +679,33 @@ mod tests {
         // reopen independently to confirm bytes are on disk
         let d2 = Document::open_file(&path).unwrap();
         assert_eq!(d2.to_vec(), expect);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // save_to must refuse a non-regular-file target (fifo stands in for a raw
+    // device: temp+rename over it is unsound and would leave a stray .tmp).
+    #[cfg(unix)]
+    #[test]
+    fn save_to_refuses_non_regular_target() {
+        use std::ffi::CString;
+        let mut path = std::env::temp_dir();
+        let stamp = &path as *const _ as usize;
+        path.push(format!("bewitched_fifo_{:x}", stamp));
+        let _ = std::fs::remove_file(&path);
+        let c = CString::new(path.to_string_lossy().as_bytes()).unwrap();
+        extern "C" {
+            fn mkfifo(path: *const std::os::raw::c_char, mode: u32) -> std::os::raw::c_int;
+        }
+        let rc = unsafe { mkfifo(c.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "mkfifo failed");
+
+        let mut d = doc_with(b"payload");
+        let err = d.save_to(&path).expect_err("save_to over a fifo must fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("regular-file-backed"));
+
+        // no stray temp file left behind
+        assert!(!path.with_extension("bewitched.tmp").exists());
         let _ = std::fs::remove_file(&path);
     }
 

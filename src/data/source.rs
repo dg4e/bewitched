@@ -32,6 +32,15 @@ pub trait DataSource: Send + Sync {
     fn label(&self) -> &str {
         "source"
     }
+
+    /// True only for sources backed by an ordinary, seekable regular file on
+    /// disk. Raw devices, live process memory, and in-memory buffers return
+    /// `false`. Callers that rely on atomic temp-file + rename semantics
+    /// (e.g. `Document::save_to`) use this to refuse writing back to a source
+    /// where rename-over-target is unsound.
+    fn is_regular_file(&self) -> bool {
+        false
+    }
 }
 
 /// An empty source — used for brand-new documents.
@@ -94,6 +103,10 @@ pub struct FileSource {
     backing: Backing,
     len: u64,
     label: String,
+    /// True if the path resolved to an ordinary regular file (not a block/
+    /// character device, fifo, socket, ...). Determines whether the document
+    /// can be saved back via temp-file + atomic rename.
+    regular: bool,
 }
 
 enum Backing {
@@ -106,7 +119,9 @@ impl FileSource {
     pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
         let path = path.as_ref();
         let file = File::open(path)?;
-        let mut len = file.metadata()?.len();
+        let meta = file.metadata()?;
+        let mut len = meta.len();
+        let regular = meta.file_type().is_file();
         let label = path
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -134,6 +149,7 @@ impl FileSource {
             backing,
             len,
             label,
+            regular,
         })
     }
 }
@@ -238,6 +254,10 @@ impl DataSource for FileSource {
 
     fn label(&self) -> &str {
         &self.label
+    }
+
+    fn is_regular_file(&self) -> bool {
+        self.regular
     }
 }
 
