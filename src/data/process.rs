@@ -25,7 +25,9 @@ pub struct MemRegion {
 
 impl MemRegion {
     pub fn end(&self) -> u64 {
-        self.base + self.size
+        // `base`/`size` come from the OS region walker; a region at the very top
+        // of the address space could otherwise overflow.
+        self.base.saturating_add(self.size)
     }
 }
 
@@ -219,7 +221,7 @@ mod imp {
                     writable: prot & mach2::vm_prot::VM_PROT_WRITE != 0,
                     executable: prot & mach2::vm_prot::VM_PROT_EXECUTE != 0,
                 });
-                addr += size;
+                addr = addr.saturating_add(size);
                 if out.len() > 100_000 {
                     break;
                 }
@@ -297,7 +299,9 @@ mod imp {
                 let p = perms.as_bytes();
                 out.push(MemRegion {
                     base,
-                    size: end - base,
+                    // `end`/`base` are parsed from /proc/<pid>/maps; guard against
+                    // a malformed line where end < base rather than panicking.
+                    size: end.saturating_sub(base),
                     readable: p.first() == Some(&b'r'),
                     writable: p.get(1) == Some(&b'w'),
                     executable: p.get(2) == Some(&b'x'),
@@ -550,7 +554,7 @@ impl DataSource for ProcessSource {
         }
         let want = buf.len().min((self.len - offset) as usize);
         self.handle
-            .read(self.base + offset, &mut buf[..want])
+            .read(self.base.saturating_add(offset), &mut buf[..want])
             .unwrap_or(0)
     }
 

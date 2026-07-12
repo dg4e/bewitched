@@ -38,7 +38,9 @@ impl Region {
     }
 
     pub fn end(&self) -> u64 {
-        self.start + self.len
+        // `start`/`len` can originate from file-derived template/sidecar data;
+        // saturate rather than overflow on a hostile or corrupt region.
+        self.start.saturating_add(self.len)
     }
 
     fn collapsed(&self) -> bool {
