@@ -737,6 +737,8 @@ fn tools_list() -> Value {
           "inputSchema": path_schema(json!({
             "type": {"type":"string","description":"text|utf16|hex|i8|i16|i32|i64|f32|f64"},
             "value": {"type":"string"},
+            "endian": {"type":"string","description":"byte order for numeric types: little|big (default little)"},
+            "case_insensitive": {"type":"boolean","description":"case-insensitive match for text (default false)"},
             "max": {"type":"integer","description":"max results (default 100)"} })) },
         { "name": "search_pattern", "description": "Wildcard 'AOB' search: a hex pattern with '?' wildcards, e.g. 'DE ?? BE EF'. Returns match offsets.",
           "inputSchema": path_schema(json!({ "pattern": {"type":"string"}, "max": {"type":"integer"} })) },
@@ -920,11 +922,26 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let ty = search::DataType::from_name(str_or(args, "type", "hex"))?;
             let value = str_or(args, "value", "");
             let max = u64_arg(args, "max", 100) as usize;
-            let needle = search::needle_bytes(value, ty, search::Endian::Little, false)?;
+            let endian = match str_or(args, "endian", "little") {
+                "little" | "le" => search::Endian::Little,
+                "big" | "be" => search::Endian::Big,
+                other => return Err(format!("invalid 'endian': {other} (expected little|big)")),
+            };
+            let case_insensitive = args
+                .get("case_insensitive")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let needle = search::needle_bytes(value, ty, endian, case_insensitive)?;
             let mut hits = Vec::new();
             let mut from = 0u64;
             while hits.len() < max {
-                match search::find(&doc, &needle, from, search::Direction::Forward, false) {
+                match search::find(
+                    &doc,
+                    &needle,
+                    from,
+                    search::Direction::Forward,
+                    case_insensitive,
+                ) {
                     Some(o) => {
                         hits.push(o);
                         from = o + 1;
@@ -1552,6 +1569,47 @@ mod tests {
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         let v: Value = serde_json::from_str(text).unwrap();
         assert_eq!(v["matches"], json!([2, 10]));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn search_honors_endianness() {
+        // i32 value 1 => LE 01 00 00 00, BE 00 00 00 01
+        let p = tmpfile(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]);
+        let mut s = Server::new();
+        let le = call(
+            &mut s,
+            "search",
+            json!({"path": p.to_str().unwrap(), "type": "i32", "value": "1", "endian": "little"}),
+        );
+        assert_eq!(le["matches"], json!([0]));
+        let be = call(
+            &mut s,
+            "search",
+            json!({"path": p.to_str().unwrap(), "type": "i32", "value": "1", "endian": "big"}),
+        );
+        assert_eq!(be["matches"], json!([4]));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn search_case_insensitive() {
+        let p = tmpfile(b"--NeEdLe--");
+        let mut s = Server::new();
+        // case-sensitive (default) finds nothing
+        let cs = call(
+            &mut s,
+            "search",
+            json!({"path": p.to_str().unwrap(), "type": "text", "value": "needle"}),
+        );
+        assert_eq!(cs["count"], 0);
+        // case-insensitive finds it
+        let ci = call(
+            &mut s,
+            "search",
+            json!({"path": p.to_str().unwrap(), "type": "text", "value": "needle", "case_insensitive": true}),
+        );
+        assert_eq!(ci["matches"], json!([2]));
         let _ = std::fs::remove_file(&p);
     }
 
