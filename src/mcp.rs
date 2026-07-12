@@ -44,6 +44,10 @@ pub struct Server {
     /// has full filesystem reach — absolute paths bypass it — this just gives
     /// relative paths a stable, agent-controllable anchor (see set_working_dir).
     cwd: PathBuf,
+    /// Optional filesystem confinement root (from `BEWITCHED_MCP_ROOT`).
+    /// `None` = unconfined (default). When set, every resolved path argument
+    /// must stay inside this canonicalized root or the tool call is refused.
+    root: Option<PathBuf>,
 }
 
 impl Default for Server {
@@ -52,6 +56,7 @@ impl Default for Server {
             sessions: HashMap::new(),
             next_id: 0,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            root: mcp_root_from_env(),
         }
     }
 }
@@ -59,6 +64,16 @@ impl Default for Server {
 impl Server {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Construct a server confined to `root` (test/embedding helper). Equivalent
+    /// to running with `BEWITCHED_MCP_ROOT` set, but without touching global env.
+    #[cfg(test)]
+    fn with_root(root: PathBuf) -> Self {
+        Self {
+            root: Some(root),
+            ..Self::default()
+        }
     }
 
     /// Resolve a path argument: absolute paths are returned unchanged; relative
@@ -74,17 +89,27 @@ impl Server {
 
     /// Return a copy of `args` with every known path key resolved to an absolute
     /// path, so downstream tool code (here and in `call_tool`) needs no changes.
-    fn resolve_path_args(&self, args: &Value) -> Value {
+    ///
+    /// If `BEWITCHED_MCP_ROOT` is set, every resolved path is additionally
+    /// confined to that root; a path that escapes it yields an error and the
+    /// tool call is refused. When the env var is unset, behavior is unchanged.
+    fn resolve_path_args(&self, args: &Value) -> Result<Value, String> {
         let mut a = args.clone();
         if let Some(obj) = a.as_object_mut() {
             for key in PATH_KEYS {
                 if let Some(Value::String(s)) = obj.get(*key) {
-                    let resolved = self.resolve(s).to_string_lossy().into_owned();
+                    let resolved = self.resolve(s);
+                    if let Some(root) = &self.root {
+                        confine_to_root(root, &resolved).map_err(|e| {
+                            format!("path argument '{key}' is outside BEWITCHED_MCP_ROOT: {e}")
+                        })?;
+                    }
+                    let resolved = resolved.to_string_lossy().into_owned();
                     obj.insert((*key).to_string(), Value::String(resolved));
                 }
             }
         }
-        a
+        Ok(a)
     }
 
     /// Run the server loop over stdin/stdout until EOF.
@@ -192,8 +217,9 @@ impl Server {
     /// else delegates to the stateless `call_tool`.
     fn dispatch_tool(&mut self, name: &str, args: &Value) -> Result<String, String> {
         // Resolve relative path arguments against the working directory up front,
-        // so every tool (and `call_tool`) sees absolute paths.
-        let args = &self.resolve_path_args(args);
+        // so every tool (and `call_tool`) sees absolute paths. This also enforces
+        // BEWITCHED_MCP_ROOT confinement when that env var is set.
+        let args = &self.resolve_path_args(args)?;
         match name {
             "get_working_dir" => Ok(json!({ "cwd": self.cwd.display().to_string() }).to_string()),
             "set_working_dir" => {
@@ -457,6 +483,81 @@ impl Server {
             }
             _ => call_tool(name, args),
         }
+    }
+}
+
+/// The optional filesystem confinement root (`BEWITCHED_MCP_ROOT`), canonicalized.
+/// `None` means unconfined (the default, backward-compatible behavior). A set but
+/// non-canonicalizable value (e.g. a nonexistent directory) confines to the
+/// literal path so nothing accidentally escapes.
+fn mcp_root_from_env() -> Option<PathBuf> {
+    let raw = std::env::var_os("BEWITCHED_MCP_ROOT")?;
+    if raw.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(&raw);
+    Some(std::fs::canonicalize(&p).unwrap_or(p))
+}
+
+/// Verify that `candidate` (an absolute path that may not yet exist) resolves
+/// inside `root`. Because the leaf may not exist, we canonicalize the deepest
+/// existing ancestor and re-append the remaining components, rejecting any `..`
+/// that would climb above it. Returns `Ok(())` when contained.
+fn confine_to_root(root: &Path, candidate: &Path) -> Result<(), String> {
+    // Walk from the candidate up to the first ancestor that exists on disk.
+    let mut existing = candidate;
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let real = loop {
+        match std::fs::canonicalize(existing) {
+            Ok(r) => break r,
+            Err(_) => match existing.parent() {
+                Some(parent) => {
+                    if let Some(name) = existing.file_name() {
+                        tail.push(name.to_os_string());
+                    }
+                    existing = parent;
+                }
+                // No existing ancestor at all: fall back to a lexical resolution.
+                None => return lexical_confine(root, candidate),
+            },
+        }
+    };
+    // Reattach the not-yet-existing tail (innermost was pushed first).
+    let mut resolved = real;
+    for name in tail.into_iter().rev() {
+        resolved.push(name);
+    }
+    if resolved.starts_with(root) {
+        Ok(())
+    } else {
+        Err(format!("{} escapes {}", resolved.display(), root.display()))
+    }
+}
+
+/// Fallback containment check that normalizes `.`/`..` lexically (no filesystem
+/// access). Used only when the candidate has no existing ancestor to canonicalize.
+fn lexical_confine(root: &Path, candidate: &Path) -> Result<(), String> {
+    use std::path::Component;
+    let mut norm = PathBuf::new();
+    for comp in candidate.components() {
+        match comp {
+            Component::ParentDir => {
+                if !norm.pop() {
+                    return Err(format!(
+                        "{} escapes {}",
+                        candidate.display(),
+                        root.display()
+                    ));
+                }
+            }
+            Component::CurDir => {}
+            other => norm.push(other.as_os_str()),
+        }
+    }
+    if norm.starts_with(root) {
+        Ok(())
+    } else {
+        Err(format!("{} escapes {}", norm.display(), root.display()))
     }
 }
 
@@ -1856,5 +1957,79 @@ mod tests {
             .unwrap();
         assert_eq!(resp["result"]["isError"], json!(true));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Pure containment logic — no env, no races.
+    #[test]
+    fn confine_to_root_logic() {
+        let root = std::env::temp_dir();
+        let root = std::fs::canonicalize(&root).unwrap();
+        // inside (existing) is allowed
+        assert!(confine_to_root(&root, &root.join("some_file.bin")).is_ok());
+        // a not-yet-existing nested leaf inside root is allowed
+        assert!(confine_to_root(&root, &root.join("newdir/leaf.bin")).is_ok());
+        // climbing out with .. is rejected
+        assert!(confine_to_root(&root, &root.join("../escape.bin")).is_err());
+        // a sibling absolute path outside root is rejected
+        assert!(confine_to_root(&root, Path::new("/etc/passwd")).is_err());
+    }
+
+    #[test]
+    fn mcp_root_confines_reads_and_writes() {
+        // Canonicalize so symlinked temp roots (macOS /var -> /private/var) compare equal.
+        let root = std::fs::canonicalize(tmpdir()).unwrap();
+        let inside = root.join("inside.bin");
+        std::fs::write(&inside, b"hello world").unwrap();
+
+        let mut s = Server::with_root(root.clone());
+        // read inside the root: allowed (returns a hex-dump string)
+        let ok = call(
+            &mut s,
+            "read_hex",
+            json!({ "path": inside.to_str().unwrap() }),
+        );
+        assert!(ok.is_string() && !ok.as_str().unwrap().is_empty());
+
+        // read outside the root: refused with a clear error
+        let resp = s
+            .handle(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":"read_hex","arguments":{"path":"/etc/hosts"}}}))
+            .unwrap();
+        assert_eq!(resp["result"]["isError"], json!(true));
+        let msg = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(msg.contains("BEWITCHED_MCP_ROOT"), "got: {msg}");
+
+        // a write (carve output) outside the root is refused
+        let resp = s
+            .handle(&json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+                "params":{"name":"carve","arguments":{
+                    "path": inside.to_str().unwrap(), "offset": 0, "length": 4,
+                    "output": "/tmp/escape_carve.bin"}}}))
+            .unwrap();
+        assert_eq!(resp["result"]["isError"], json!(true));
+
+        // a write inside the root is allowed
+        let out = root.join("carved.bin");
+        let ok = call(
+            &mut s,
+            "carve",
+            json!({ "path": inside.to_str().unwrap(), "offset": 0, "length": 5,
+                    "output": out.to_str().unwrap() }),
+        );
+        assert!(ok.is_object() || ok.is_string());
+        assert!(out.exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn no_mcp_root_is_unconfined() {
+        // A default server (no root) resolves an absolute path anywhere.
+        let p = tmpfile(b"unconfined");
+        let mut s = Server::new();
+        s.root = None; // ensure unconfined regardless of ambient env
+        let ok = call(&mut s, "read_hex", json!({ "path": p.to_str().unwrap() }));
+        assert!(ok.is_string() && !ok.as_str().unwrap().is_empty());
+        let _ = std::fs::remove_file(&p);
     }
 }
