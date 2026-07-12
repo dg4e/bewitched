@@ -149,11 +149,7 @@ pub fn build_row(layout: &Layout, ctx: &RowCtx) -> LayoutJob {
     let font = &ctx.font;
 
     // Address gutter.
-    let addr = format!(
-        "{:0width$X}  ",
-        ctx.base_addr,
-        width = layout.addr_digits
-    );
+    let addr = format!("{:0width$X}  ", ctx.base_addr, width = layout.addr_digits);
     job.append(&addr, 0.0, fmt(font, theme::ADDR, Color32::TRANSPARENT));
 
     let bpr = layout.bytes_per_row;
@@ -274,7 +270,10 @@ mod tests {
     #[test]
     fn addr_digits_grow_with_size() {
         assert_eq!(Layout::new(16, 1, 1, ViewMode::Both).addr_digits, 8);
-        assert_eq!(Layout::new(16, 1, 0x1_0000_0000, ViewMode::Both).addr_digits, 8);
+        assert_eq!(
+            Layout::new(16, 1, 0x1_0000_0000, ViewMode::Both).addr_digits,
+            8
+        );
         // needs 9 hex digits for offsets up to ~16 GiB
         assert!(Layout::new(16, 1, 0x10_0000_0000, ViewMode::Both).addr_digits >= 9);
     }

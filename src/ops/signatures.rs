@@ -50,35 +50,139 @@ const SHA256_K_PREFIX: &[u8] = &[
 
 const SIGS: &[SigDef] = &[
     // File formats
-    SigDef { magic: b"\x89PNG\r\n\x1a\n", name: "PNG image", category: Category::FileFormat },
-    SigDef { magic: b"GIF87a", name: "GIF image", category: Category::FileFormat },
-    SigDef { magic: b"GIF89a", name: "GIF image", category: Category::FileFormat },
-    SigDef { magic: b"\xff\xd8\xff", name: "JPEG image", category: Category::FileFormat },
-    SigDef { magic: b"BM", name: "BMP image", category: Category::FileFormat },
-    SigDef { magic: b"%PDF-", name: "PDF document", category: Category::FileFormat },
-    SigDef { magic: b"RIFF", name: "RIFF (WAV/AVI)", category: Category::FileFormat },
-    SigDef { magic: b"OggS", name: "Ogg stream", category: Category::FileFormat },
-    SigDef { magic: b"fLaC", name: "FLAC audio", category: Category::FileFormat },
-    SigDef { magic: b"SQLite format 3\x00", name: "SQLite database", category: Category::FileFormat },
-    SigDef { magic: b"\x1aE\xdf\xa3", name: "Matroska/WebM", category: Category::FileFormat },
+    SigDef {
+        magic: b"\x89PNG\r\n\x1a\n",
+        name: "PNG image",
+        category: Category::FileFormat,
+    },
+    SigDef {
+        magic: b"GIF87a",
+        name: "GIF image",
+        category: Category::FileFormat,
+    },
+    SigDef {
+        magic: b"GIF89a",
+        name: "GIF image",
+        category: Category::FileFormat,
+    },
+    SigDef {
+        magic: b"\xff\xd8\xff",
+        name: "JPEG image",
+        category: Category::FileFormat,
+    },
+    SigDef {
+        magic: b"BM",
+        name: "BMP image",
+        category: Category::FileFormat,
+    },
+    SigDef {
+        magic: b"%PDF-",
+        name: "PDF document",
+        category: Category::FileFormat,
+    },
+    SigDef {
+        magic: b"RIFF",
+        name: "RIFF (WAV/AVI)",
+        category: Category::FileFormat,
+    },
+    SigDef {
+        magic: b"OggS",
+        name: "Ogg stream",
+        category: Category::FileFormat,
+    },
+    SigDef {
+        magic: b"fLaC",
+        name: "FLAC audio",
+        category: Category::FileFormat,
+    },
+    SigDef {
+        magic: b"SQLite format 3\x00",
+        name: "SQLite database",
+        category: Category::FileFormat,
+    },
+    SigDef {
+        magic: b"\x1aE\xdf\xa3",
+        name: "Matroska/WebM",
+        category: Category::FileFormat,
+    },
     // Compression / archives
-    SigDef { magic: b"PK\x03\x04", name: "ZIP archive", category: Category::Compression },
-    SigDef { magic: b"\x1f\x8b", name: "gzip", category: Category::Compression },
-    SigDef { magic: b"BZh", name: "bzip2", category: Category::Compression },
-    SigDef { magic: b"\xfd7zXZ\x00", name: "xz", category: Category::Compression },
-    SigDef { magic: b"\x28\xb5\x2f\xfd", name: "zstd", category: Category::Compression },
-    SigDef { magic: b"Rar!\x1a\x07", name: "RAR archive", category: Category::Compression },
-    SigDef { magic: b"7z\xbc\xaf\x27\x1c", name: "7-Zip archive", category: Category::Compression },
+    SigDef {
+        magic: b"PK\x03\x04",
+        name: "ZIP archive",
+        category: Category::Compression,
+    },
+    SigDef {
+        magic: b"\x1f\x8b",
+        name: "gzip",
+        category: Category::Compression,
+    },
+    SigDef {
+        magic: b"BZh",
+        name: "bzip2",
+        category: Category::Compression,
+    },
+    SigDef {
+        magic: b"\xfd7zXZ\x00",
+        name: "xz",
+        category: Category::Compression,
+    },
+    SigDef {
+        magic: b"\x28\xb5\x2f\xfd",
+        name: "zstd",
+        category: Category::Compression,
+    },
+    SigDef {
+        magic: b"Rar!\x1a\x07",
+        name: "RAR archive",
+        category: Category::Compression,
+    },
+    SigDef {
+        magic: b"7z\xbc\xaf\x27\x1c",
+        name: "7-Zip archive",
+        category: Category::Compression,
+    },
     // Executables
-    SigDef { magic: b"\x7fELF", name: "ELF executable", category: Category::Executable },
-    SigDef { magic: b"MZ", name: "DOS/PE executable", category: Category::Executable },
-    SigDef { magic: b"\xca\xfe\xba\xbe", name: "Java class / Mach-O FAT", category: Category::Executable },
-    SigDef { magic: b"\xfe\xed\xfa\xce", name: "Mach-O (32-bit)", category: Category::Executable },
-    SigDef { magic: b"\xfe\xed\xfa\xcf", name: "Mach-O (64-bit)", category: Category::Executable },
-    SigDef { magic: b"\xcf\xfa\xed\xfe", name: "Mach-O (64-bit LE)", category: Category::Executable },
+    SigDef {
+        magic: b"\x7fELF",
+        name: "ELF executable",
+        category: Category::Executable,
+    },
+    SigDef {
+        magic: b"MZ",
+        name: "DOS/PE executable",
+        category: Category::Executable,
+    },
+    SigDef {
+        magic: b"\xca\xfe\xba\xbe",
+        name: "Java class / Mach-O FAT",
+        category: Category::Executable,
+    },
+    SigDef {
+        magic: b"\xfe\xed\xfa\xce",
+        name: "Mach-O (32-bit)",
+        category: Category::Executable,
+    },
+    SigDef {
+        magic: b"\xfe\xed\xfa\xcf",
+        name: "Mach-O (64-bit)",
+        category: Category::Executable,
+    },
+    SigDef {
+        magic: b"\xcf\xfa\xed\xfe",
+        name: "Mach-O (64-bit LE)",
+        category: Category::Executable,
+    },
     // Crypto constants
-    SigDef { magic: AES_SBOX_PREFIX, name: "AES S-box", category: Category::Crypto },
-    SigDef { magic: SHA256_K_PREFIX, name: "SHA-256 constants", category: Category::Crypto },
+    SigDef {
+        magic: AES_SBOX_PREFIX,
+        name: "AES S-box",
+        category: Category::Crypto,
+    },
+    SigDef {
+        magic: SHA256_K_PREFIX,
+        name: "SHA-256 constants",
+        category: Category::Crypto,
+    },
 ];
 
 const WIN: usize = 1 << 20;
@@ -193,7 +297,9 @@ mod tests {
         data[pos..pos + 8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
         let d = doc(&data);
         let hits = scan(&d, 0, d.len(), 100, &Progress::default());
-        assert!(hits.iter().any(|h| h.offset == pos as u64 && h.name == "PNG image"));
+        assert!(hits
+            .iter()
+            .any(|h| h.offset == pos as u64 && h.name == "PNG image"));
     }
 
     #[test]

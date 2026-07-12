@@ -93,7 +93,11 @@ impl ViewMap {
         let mut row = 0usize;
         let mut pos = 0u64;
 
-        let push = |blocks: &mut Vec<Block>, row: &mut usize, off_start: u64, off_len: u64, kind: BlockKind| {
+        let push = |blocks: &mut Vec<Block>,
+                    row: &mut usize,
+                    off_start: u64,
+                    off_len: u64,
+                    kind: BlockKind| {
             if off_len == 0 {
                 return;
             }
@@ -182,7 +186,13 @@ impl ViewMap {
             }
         }
         // offset == total: last row
-        if off >= self.blocks.last().map(|b| b.off_start + b.off_len).unwrap_or(0) {
+        if off
+            >= self
+                .blocks
+                .last()
+                .map(|b| b.off_start + b.off_len)
+                .unwrap_or(0)
+        {
             return self.total_rows.checked_sub(1);
         }
         None

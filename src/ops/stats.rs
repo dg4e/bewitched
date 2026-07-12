@@ -25,7 +25,9 @@ impl Stats {
         if self.total == 0 {
             return "empty";
         }
-        let printable: u64 = (0x20u8..=0x7e).map(|b| self.counts[b as usize]).sum::<u64>()
+        let printable: u64 = (0x20u8..=0x7e)
+            .map(|b| self.counts[b as usize])
+            .sum::<u64>()
             + self.counts[b'\t' as usize]
             + self.counts[b'\n' as usize]
             + self.counts[b'\r' as usize];
@@ -96,7 +98,10 @@ pub fn entropy_map(
 ) -> Vec<f32> {
     const SAMPLE: u64 = 1 << 16;
     let buckets = buckets.max(1);
-    let total = offset.saturating_add(len).min(doc.len()).saturating_sub(offset);
+    let total = offset
+        .saturating_add(len)
+        .min(doc.len())
+        .saturating_sub(offset);
     progress.set_total(buckets as u64);
     let mut out = Vec::with_capacity(buckets);
     if total == 0 {
@@ -181,7 +186,10 @@ mod tests {
             classify(b"The quick brown fox jumps over the lazy dog.\n"),
             "text"
         );
-        assert_eq!(classify(&[0xAAu8; 200]), "uniform / sparse (mostly one value)");
+        assert_eq!(
+            classify(&[0xAAu8; 200]),
+            "uniform / sparse (mostly one value)"
+        );
         // pseudo-random high-entropy bytes
         let mut data = Vec::new();
         let mut x: u32 = 0x12345678;
@@ -214,10 +222,7 @@ mod tests {
 
     #[test]
     fn analyze_offset_subrange() {
-        let doc = Document::from_source(Arc::new(MemSource::new(
-            b"AAAABBBB".to_vec(),
-            "t",
-        )));
+        let doc = Document::from_source(Arc::new(MemSource::new(b"AAAABBBB".to_vec(), "t")));
         let s = analyze(&doc, 4, 4, &Progress::default());
         assert_eq!(s.total, 4);
         assert_eq!(s.counts[b'B' as usize], 4);

@@ -163,7 +163,9 @@ fn bps_decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
         // `checked_shl` rejects shifts >= 64, and `checked_add` rejects
         // accumulation overflow, so a malformed all-continuation varint can
         // neither panic (debug) nor silently wrap (release).
-        let add = ((b & 0x7f) as u64).checked_shl(shift).ok_or("varint too long")?;
+        let add = ((b & 0x7f) as u64)
+            .checked_shl(shift)
+            .ok_or("varint too long")?;
         result = result.checked_add(add).ok_or("varint overflow")?;
         if b & 0x80 != 0 {
             return Ok(result);
@@ -250,7 +252,11 @@ pub fn apply_bps(patch: &[u8], source: &[u8]) -> Result<Vec<u8>, String> {
             }
             2 => {
                 let raw = bps_decode_varint(patch, &mut pos)?;
-                let delta = if raw & 1 != 0 { -((raw >> 1) as i64) } else { (raw >> 1) as i64 };
+                let delta = if raw & 1 != 0 {
+                    -((raw >> 1) as i64)
+                } else {
+                    (raw >> 1) as i64
+                };
                 source_rel += delta;
                 for _ in 0..len {
                     let idx = usize::try_from(source_rel).map_err(|_| "negative source offset")?;
@@ -261,7 +267,11 @@ pub fn apply_bps(patch: &[u8], source: &[u8]) -> Result<Vec<u8>, String> {
             }
             3 => {
                 let raw = bps_decode_varint(patch, &mut pos)?;
-                let delta = if raw & 1 != 0 { -((raw >> 1) as i64) } else { (raw >> 1) as i64 };
+                let delta = if raw & 1 != 0 {
+                    -((raw >> 1) as i64)
+                } else {
+                    (raw >> 1) as i64
+                };
                 target_rel += delta;
                 for _ in 0..len {
                     let idx = usize::try_from(target_rel).map_err(|_| "negative target offset")?;
@@ -275,7 +285,10 @@ pub fn apply_bps(patch: &[u8], source: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     if out.len() != target_size {
-        return Err(format!("target size mismatch ({} vs {target_size})", out.len()));
+        return Err(format!(
+            "target size mismatch ({} vs {target_size})",
+            out.len()
+        ));
     }
     if crc32(&out) != tgt_crc {
         return Err("target CRC mismatch (corrupt patch)".into());
@@ -358,7 +371,9 @@ mod tests {
     #[test]
     fn bps_rejects_wrong_source() {
         let patch = make_bps(b"original", b"modified");
-        assert!(apply_bps(&patch, b"WRONG BASE").unwrap_err().contains("source CRC"));
+        assert!(apply_bps(&patch, b"WRONG BASE")
+            .unwrap_err()
+            .contains("source CRC"));
     }
 
     #[test]

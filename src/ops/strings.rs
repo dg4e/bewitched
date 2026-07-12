@@ -170,7 +170,9 @@ mod tests {
         // "Hi" in UTF-16LE: 48 00 69 00
         let d = doc(b"\xff\x48\x00\x69\x00\x00");
         let found = extract(&d, 0, d.len(), 2, 1000, &Progress::default());
-        assert!(found.iter().any(|f| f.kind == Kind::Utf16 && f.text == "Hi"));
+        assert!(found
+            .iter()
+            .any(|f| f.kind == Kind::Utf16 && f.text == "Hi"));
     }
 
     #[test]

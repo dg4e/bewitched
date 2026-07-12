@@ -63,20 +63,30 @@ impl AboutTarget {
 /// Must run on the main thread (it does, from `App::new`). A no-op if the menu
 /// isn't there yet or has no standard-about item — we simply leave the default.
 pub fn install(ctx: &egui::Context) {
-    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
     *CTX.lock().unwrap() = Some(ctx.clone());
 
     let app = NSApplication::sharedApplication(mtm);
     // SAFETY: all run on the main thread; these are plain AppKit accessors.
     unsafe {
-        let Some(menubar) = app.mainMenu() else { return };
+        let Some(menubar) = app.mainMenu() else {
+            return;
+        };
         // The application menu is the submenu of the first menubar item.
-        let Some(app_item) = menubar.itemAtIndex(0) else { return };
-        let Some(app_menu) = app_item.submenu() else { return };
+        let Some(app_item) = menubar.itemAtIndex(0) else {
+            return;
+        };
+        let Some(app_menu) = app_item.submenu() else {
+            return;
+        };
 
         let std_about = sel!(orderFrontStandardAboutPanel:);
         for i in 0..app_menu.numberOfItems() {
-            let Some(item) = app_menu.itemAtIndex(i) else { continue };
+            let Some(item) = app_menu.itemAtIndex(i) else {
+                continue;
+            };
             if item.action() == Some(std_about) {
                 let target = AboutTarget::new();
                 item.setTarget(Some(&target));

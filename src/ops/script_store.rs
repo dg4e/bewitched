@@ -28,7 +28,13 @@ pub fn scripts_dir() -> PathBuf {
 fn sanitize(name: &str) -> String {
     let s: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let s = s.trim().to_string();
     if s.is_empty() {

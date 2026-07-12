@@ -23,12 +23,7 @@ const WIN: usize = 1 << 20;
 /// Compute the differing ranges between `a` and `b`. Bytes past the shorter
 /// input's end (where the lengths differ) are reported as one trailing range.
 /// Capped at `max` ranges.
-pub fn diff(
-    a: &dyn ByteReader,
-    b: &dyn ByteReader,
-    max: usize,
-    progress: &Progress,
-) -> DiffResult {
+pub fn diff(a: &dyn ByteReader, b: &dyn ByteReader, max: usize, progress: &Progress) -> DiffResult {
     let len_a = a.len();
     let len_b = b.len();
     let common = len_a.min(len_b);
@@ -59,7 +54,10 @@ pub fn diff(
             match (differs, run_start) {
                 (true, None) => run_start = Some(abs),
                 (false, Some(start)) => {
-                    ranges.push(DiffRange { offset: start, len: abs - start });
+                    ranges.push(DiffRange {
+                        offset: start,
+                        len: abs - start,
+                    });
                     run_start = None;
                     if ranges.len() >= max {
                         truncated = true;
@@ -76,7 +74,10 @@ pub fn diff(
     // close an open run at the end of the common region
     if let Some(start) = run_start {
         if ranges.len() < max {
-            ranges.push(DiffRange { offset: start, len: common - start });
+            ranges.push(DiffRange {
+                offset: start,
+                len: common - start,
+            });
         } else {
             truncated = true;
         }
@@ -126,10 +127,13 @@ mod tests {
         let b = d(b"AABBAAAACA");
         let r = diff(&a, &b, 100, &Progress::default());
         // differ at [2,4) and [8,9)
-        assert_eq!(r.ranges, vec![
-            DiffRange { offset: 2, len: 2 },
-            DiffRange { offset: 8, len: 1 },
-        ]);
+        assert_eq!(
+            r.ranges,
+            vec![
+                DiffRange { offset: 2, len: 2 },
+                DiffRange { offset: 8, len: 1 },
+            ]
+        );
     }
 
     #[test]

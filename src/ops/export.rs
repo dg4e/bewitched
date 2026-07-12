@@ -70,7 +70,11 @@ impl Format {
         Format::ALL
             .iter()
             .find(|f| f.name().to_lowercase() == n || f.extension() == n)
-            .or_else(|| Format::ALL.iter().find(|f| f.name().to_lowercase().contains(&n)))
+            .or_else(|| {
+                Format::ALL
+                    .iter()
+                    .find(|f| f.name().to_lowercase().contains(&n))
+            })
             .copied()
             .ok_or_else(|| format!("unknown export format: {s}"))
     }
@@ -158,7 +162,14 @@ pub fn export_bytes(data: &[u8], base: u64, fmt: Format) -> String {
             ", ",
             12,
         ),
-        Format::Java => array(data, "byte[] data = {", "};", &|b| format!("(byte)0x{b:02X}"), ", ", 10),
+        Format::Java => array(
+            data,
+            "byte[] data = {",
+            "};",
+            &|b| format!("(byte)0x{b:02X}"),
+            ", ",
+            10,
+        ),
         Format::CSharp => array(data, "byte[] data = {", "};", &hx("0x"), ", ", 12),
         Format::Rust => array(data, "let data: &[u8] = &[", "];", &hx("0x"), ", ", 12),
         Format::Go => array(data, "var data = []byte{", "}", &hx("0x"), ", ", 12),
@@ -171,7 +182,14 @@ pub fn export_bytes(data: &[u8], base: u64, fmt: Format) -> String {
             ", ",
             8,
         ),
-        Format::JavaScript => array(data, "const data = new Uint8Array([", "]);", &hx("0x"), ", ", 12),
+        Format::JavaScript => array(
+            data,
+            "const data = new Uint8Array([",
+            "]);",
+            &hx("0x"),
+            ", ",
+            12,
+        ),
         Format::TypeScript => array(
             data,
             "const data: Uint8Array = new Uint8Array([",
@@ -284,7 +302,11 @@ fn hex_row(addr: u64, chunk: &[u8]) -> String {
         }
         if let Some(&b) = chunk.get(i) {
             hex.push_str(&format!("{:02X} ", b));
-            asc.push(if (0x20..0x7f).contains(&b) { b as char } else { '.' });
+            asc.push(if (0x20..0x7f).contains(&b) {
+                b as char
+            } else {
+                '.'
+            });
         } else {
             hex.push_str("   ");
         }
@@ -307,7 +329,13 @@ fn markdown(data: &[u8], base: u64) -> String {
         let hex: Vec<String> = chunk.iter().map(|b| format!("{:02X}", b)).collect();
         let asc: String = chunk
             .iter()
-            .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+            .map(|&b| {
+                if (0x20..0x7f).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
             .collect();
         s.push_str(&format!(
             "| `{:08X}` | `{}` | `{}` |\n",

@@ -53,8 +53,14 @@ mod tests {
 
     #[test]
     fn parse_hex_pattern_forms() {
-        assert_eq!(parse_hex_pattern("DEADBEEF").unwrap(), vec![0xDE, 0xAD, 0xBE, 0xEF]);
-        assert_eq!(parse_hex_pattern("de ad be ef").unwrap(), vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(
+            parse_hex_pattern("DEADBEEF").unwrap(),
+            vec![0xDE, 0xAD, 0xBE, 0xEF]
+        );
+        assert_eq!(
+            parse_hex_pattern("de ad be ef").unwrap(),
+            vec![0xDE, 0xAD, 0xBE, 0xEF]
+        );
         assert!(parse_hex_pattern("XYZ").is_err());
         assert!(parse_hex_pattern("A").is_err());
     }

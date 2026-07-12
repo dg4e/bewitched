@@ -376,7 +376,13 @@ fn read_add_impl(add: &[u8], start: u64, max: u64, buf: &mut [u8]) -> usize {
     n
 }
 
-fn read_piece_impl(original: &dyn DataSource, add: &[u8], p: &Piece, inner: u64, buf: &mut [u8]) -> usize {
+fn read_piece_impl(
+    original: &dyn DataSource,
+    add: &[u8],
+    p: &Piece,
+    inner: u64,
+    buf: &mut [u8],
+) -> usize {
     // Never read past this piece's own extent — the source underneath may
     // contain bytes belonging to a different piece (e.g. after a delete).
     let cap = (p.len - inner) as usize;
@@ -587,7 +593,7 @@ mod tests {
     fn read_across_piece_boundaries() {
         let mut d = doc_with(b"AAAABBBB");
         d.insert(4, b"....."); // AAAA.....BBBB
-        // a single read spanning original/add/original pieces
+                               // a single read spanning original/add/original pieces
         assert_eq!(d.read_range(2, 9), b"AA.....BB");
         assert_eq!(d.len(), 13);
     }
@@ -627,7 +633,7 @@ mod tests {
         let mut d = doc_with(b"snapshot");
         let snap = d.reader();
         d.overwrite(0, b"X"); // mutate after snapshotting
-        // snapshot still reflects the state at capture time
+                              // snapshot still reflects the state at capture time
         let mut buf = [0u8; 8];
         let n = ByteReader::read_at(&snap, 0, &mut buf);
         assert_eq!(&buf[..n], b"snapshot");

@@ -102,7 +102,12 @@ pub fn inspect(bytes: &[u8], le: bool) -> Vec<Interp> {
     push("UTF-8", utf8_at(bytes));
 
     // Unsigned LEB128 varint.
-    push("uLEB128", leb128(bytes).map(|(v, n)| format!("{v} ({n} bytes)")).unwrap_or_else(dash));
+    push(
+        "uLEB128",
+        leb128(bytes)
+            .map(|(v, n)| format!("{v} ({n} bytes)"))
+            .unwrap_or_else(dash),
+    );
 
     // Colors.
     push(
@@ -116,7 +121,10 @@ pub fn inspect(bytes: &[u8], le: bool) -> Vec<Interp> {
     push(
         "RGBA",
         if bytes.len() >= 4 {
-            format!("#{:02X}{:02X}{:02X}{:02X}", bytes[0], bytes[1], bytes[2], bytes[3])
+            format!(
+                "#{:02X}{:02X}{:02X}{:02X}",
+                bytes[0], bytes[1], bytes[2], bytes[3]
+            )
         } else {
             dash()
         },
@@ -182,8 +190,10 @@ fn leb128(bytes: &[u8]) -> Option<(u64, usize)> {
 
 fn dos_datetime(bytes: &[u8]) -> String {
     // FAT/DOS: u16 date then u16 time (little-endian).
-    let (Some(date), Some(time)) = (rd_uint(bytes, 2, true), rd_uint(bytes.get(2..).unwrap_or(&[]), 2, true))
-    else {
+    let (Some(date), Some(time)) = (
+        rd_uint(bytes, 2, true),
+        rd_uint(bytes.get(2..).unwrap_or(&[]), 2, true),
+    ) else {
         return dash();
     };
     let year = ((date >> 9) & 0x7f) + 1980;

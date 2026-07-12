@@ -75,11 +75,7 @@ pub fn run(src: &str, data: &mut Vec<u8>) -> Result<String, String> {
 
 /// Run `src` with a document context, returning captured output plus any
 /// requested side effects (cursor move, regions, notes).
-pub fn run_with_ctx(
-    src: &str,
-    data: &mut Vec<u8>,
-    ctx: ScriptCtx,
-) -> Result<ScriptResult, String> {
+pub fn run_with_ctx(src: &str, data: &mut Vec<u8>, ctx: ScriptCtx) -> Result<ScriptResult, String> {
     let buf = Rc::new(RefCell::new(std::mem::take(data)));
     let log = Rc::new(RefCell::new(String::new()));
     let set_cursor: Rc<RefCell<Option<u64>>> = Rc::new(RefCell::new(None));
@@ -276,20 +272,22 @@ pub fn run_with_ctx(
     }
     {
         let b = buf.clone();
-        engine.register_fn("crc32", move || {
-            crc32fast::hash(&b.borrow()) as i64
-        });
+        engine.register_fn("crc32", move || crc32fast::hash(&b.borrow()) as i64);
     }
     {
         let b = buf.clone();
         engine.register_fn("to_upper", move || {
-            b.borrow_mut().iter_mut().for_each(|x| x.make_ascii_uppercase());
+            b.borrow_mut()
+                .iter_mut()
+                .for_each(|x| x.make_ascii_uppercase());
         });
     }
     {
         let b = buf.clone();
         engine.register_fn("to_lower", move || {
-            b.borrow_mut().iter_mut().for_each(|x| x.make_ascii_lowercase());
+            b.borrow_mut()
+                .iter_mut()
+                .for_each(|x| x.make_ascii_lowercase());
         });
     }
     {
@@ -364,10 +362,18 @@ pub fn run_with_ctx(
 
     match result {
         Ok(()) => Ok(ScriptResult {
-            log: Rc::try_unwrap(log).map(|c| c.into_inner()).unwrap_or_default(),
-            set_cursor: Rc::try_unwrap(set_cursor).map(|c| c.into_inner()).unwrap_or_default(),
-            regions: Rc::try_unwrap(regions).map(|c| c.into_inner()).unwrap_or_default(),
-            notes: Rc::try_unwrap(notes).map(|c| c.into_inner()).unwrap_or_default(),
+            log: Rc::try_unwrap(log)
+                .map(|c| c.into_inner())
+                .unwrap_or_default(),
+            set_cursor: Rc::try_unwrap(set_cursor)
+                .map(|c| c.into_inner())
+                .unwrap_or_default(),
+            regions: Rc::try_unwrap(regions)
+                .map(|c| c.into_inner())
+                .unwrap_or_default(),
+            notes: Rc::try_unwrap(notes)
+                .map(|c| c.into_inner())
+                .unwrap_or_default(),
         }),
         Err(e) => Err(format_err(&e)),
     }
@@ -463,7 +469,11 @@ mod tests {
     #[test]
     fn find_missing_returns_minus_one() {
         let mut data = vec![1u8, 2, 3];
-        let out = run(r#"print(find_byte(0x99, 0)); print(find_str("zzz"));"#, &mut data).unwrap();
+        let out = run(
+            r#"print(find_byte(0x99, 0)); print(find_str("zzz"));"#,
+            &mut data,
+        )
+        .unwrap();
         assert_eq!(out.lines().collect::<Vec<_>>(), vec!["-1", "-1"]);
     }
 
@@ -487,7 +497,11 @@ mod tests {
     #[test]
     fn signed_read() {
         let mut data = vec![0xFF, 0xFF, 0xFF, 0xFF];
-        let out = run("print(read_i16(0, true)); print(read_u16(0, true));", &mut data).unwrap();
+        let out = run(
+            "print(read_i16(0, true)); print(read_u16(0, true));",
+            &mut data,
+        )
+        .unwrap();
         assert_eq!(out.lines().collect::<Vec<_>>(), vec!["-1", "65535"]);
     }
 
@@ -506,7 +520,12 @@ mod tests {
     fn library_scripts_all_run() {
         for (name, src) in LIBRARY {
             let mut data = b"Hello, World! 12345".to_vec();
-            let ctx = ScriptCtx { sel_start: 0, sel_len: 4, doc_len: data.len() as u64, ..Default::default() };
+            let ctx = ScriptCtx {
+                sel_start: 0,
+                sel_len: 4,
+                doc_len: data.len() as u64,
+                ..Default::default()
+            };
             assert!(
                 run_with_ctx(src, &mut data, ctx).is_ok(),
                 "library script '{name}' failed to run"
@@ -530,7 +549,10 @@ mod tests {
             ctx,
         )
         .unwrap();
-        assert_eq!(out.log.lines().collect::<Vec<_>>(), vec!["64", "256", "16", "16"]);
+        assert_eq!(
+            out.log.lines().collect::<Vec<_>>(),
+            vec!["64", "256", "16", "16"]
+        );
     }
 
     #[test]
@@ -550,7 +572,10 @@ mod tests {
     #[test]
     fn no_selection_reports_minus_one() {
         let mut data = vec![0u8];
-        let ctx = ScriptCtx { sel_start: -1, ..Default::default() };
+        let ctx = ScriptCtx {
+            sel_start: -1,
+            ..Default::default()
+        };
         let out = run_with_ctx("print(sel_start());", &mut data, ctx).unwrap();
         assert_eq!(out.log.trim(), "-1");
     }

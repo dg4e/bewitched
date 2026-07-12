@@ -8,8 +8,9 @@ use egui::{Key, Sense};
 
 use crate::data::{Document, MemRegion, ProcessHandle, ProcessSource, Region, RowItem, ViewMap};
 use crate::ops::{
-    byteplot, checksum, compress, diff, disasm, export, fileops, inspect, parse_u64, patch, pattern,
-    pointer, scan, script, search, sidecar, signatures, stats, strings, template, transform, Progress,
+    byteplot, checksum, compress, diff, disasm, export, fileops, inspect, parse_u64, patch,
+    pattern, pointer, scan, script, search, sidecar, signatures, stats, strings, template,
+    transform, Progress,
 };
 
 use super::charset::Charset;
@@ -627,7 +628,11 @@ impl App {
         let positions: Vec<u64> = std::iter::once(self.cursor)
             .chain(self.extra_cursors.iter().copied())
             .collect();
-        let mut dels: Vec<u64> = positions.iter().filter(|&&p| p > 0).map(|p| p - 1).collect();
+        let mut dels: Vec<u64> = positions
+            .iter()
+            .filter(|&&p| p > 0)
+            .map(|p| p - 1)
+            .collect();
         dels.sort_unstable_by(|a, b| b.cmp(a)); // high to low
         dels.dedup();
         for d in dels {
@@ -717,7 +722,10 @@ impl App {
     fn save_annotations(&mut self) {
         let path = match &self.doc.path {
             Some(p) => sidecar::sidecar_path(p),
-            None => match rfd::FileDialog::new().add_filter("bewitched", &["bw"]).save_file() {
+            None => match rfd::FileDialog::new()
+                .add_filter("bewitched", &["bw"])
+                .save_file()
+            {
                 Some(p) => p,
                 None => return,
             },
@@ -746,7 +754,10 @@ impl App {
     }
 
     fn load_annotations_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("bewitched", &["bw"]).pick_file() {
+        if let Some(p) = rfd::FileDialog::new()
+            .add_filter("bewitched", &["bw"])
+            .pick_file()
+        {
             if self.load_annotations_from(&p) {
                 self.status = format!("loaded annotations from {}", p.display());
             }
@@ -892,7 +903,12 @@ impl App {
         } else {
             search::Endian::Little
         };
-        search::needle_bytes(&self.scan.value, TYPES[self.scan.data_type].1, endian, false)
+        search::needle_bytes(
+            &self.scan.value,
+            TYPES[self.scan.data_type].1,
+            endian,
+            false,
+        )
     }
 
     fn scan_endian(&self) -> search::Endian {
@@ -915,7 +931,11 @@ impl App {
                 return;
             }
         };
-        let align = if self.scan.aligned { needle.len() as u64 } else { 1 };
+        let align = if self.scan.aligned {
+            needle.len() as u64
+        } else {
+            1
+        };
         let reader = self.doc.reader();
         self.start_bg("scanning for value", self.doc.len(), move |p| {
             BgOutcome::Scan(scan::first_scan(&reader, &needle, align, 1_000_000, &p))
@@ -986,7 +1006,13 @@ impl App {
         let max_off = parse_u64(&self.ptrscan.max_offset).unwrap_or(0x400);
         let reader = self.doc.reader();
         self.ptrscan.results = pointer::find_pointers_to(
-            &reader, base, target, max_off, 8, 100_000, &Progress::default(),
+            &reader,
+            base,
+            target,
+            max_off,
+            8,
+            100_000,
+            &Progress::default(),
         );
         self.ptrscan.status = format!("{} pointer(s)", self.ptrscan.results.len());
     }
@@ -1016,7 +1042,10 @@ impl App {
         let modified = self.doc.to_vec();
         match patch::make_ips(&original, &modified) {
             Ok(p) => {
-                if let Some(out) = rfd::FileDialog::new().add_filter("IPS", &["ips"]).save_file() {
+                if let Some(out) = rfd::FileDialog::new()
+                    .add_filter("IPS", &["ips"])
+                    .save_file()
+                {
                     match std::fs::write(&out, &p) {
                         Ok(()) => self.status = format!("wrote IPS patch ({} bytes)", p.len()),
                         Err(e) => self.status = format!("write failed: {e}"),
@@ -1068,7 +1097,10 @@ impl App {
         };
         let modified = self.doc.to_vec();
         let p = patch::make_bps(&original, &modified);
-        if let Some(out) = rfd::FileDialog::new().add_filter("BPS", &["bps"]).save_file() {
+        if let Some(out) = rfd::FileDialog::new()
+            .add_filter("BPS", &["bps"])
+            .save_file()
+        {
             match std::fs::write(&out, &p) {
                 Ok(()) => self.status = format!("wrote BPS patch ({} bytes)", p.len()),
                 Err(e) => self.status = format!("write failed: {e}"),
@@ -1288,7 +1320,11 @@ impl App {
                     self.regions.push(reg);
                 }
                 for (offset, nlen, text) in r.notes {
-                    self.notes.push(sidecar::Note { offset, len: nlen, text });
+                    self.notes.push(sidecar::Note {
+                        offset,
+                        len: nlen,
+                        text,
+                    });
                 }
                 if let Some(c) = r.set_cursor {
                     self.cursor = c.min(self.doc.len());
@@ -1383,7 +1419,12 @@ impl App {
         let seq = PRINT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let label = self.doc.label().replace(['/', '\\'], "_");
         let mut path = std::env::temp_dir();
-        path.push(format!("bewitched_print_{}_{}_{}.html", std::process::id(), seq, label));
+        path.push(format!(
+            "bewitched_print_{}_{}_{}.html",
+            std::process::id(),
+            seq,
+            label
+        ));
         let write_res = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1415,7 +1456,8 @@ impl App {
 
     /// Inclusive selection as [start, end_exclusive).
     fn selection_range(&self) -> Option<(u64, u64)> {
-        self.selection().map(|(a, b)| (a, (b + 1).min(self.doc.len())))
+        self.selection()
+            .map(|(a, b)| (a, (b + 1).min(self.doc.len())))
     }
 
     fn clear_selection(&mut self) {
@@ -1611,7 +1653,11 @@ impl App {
     fn copy(&mut self, ctx: &egui::Context) {
         if let Some((s, e)) = self.selection_range() {
             self.clipboard = self.doc.read_range(s, (e - s) as usize);
-            let hex: Vec<String> = self.clipboard.iter().map(|b| format!("{:02X}", b)).collect();
+            let hex: Vec<String> = self
+                .clipboard
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect();
             ctx.copy_text(hex.join(" "));
             self.status = format!("copied {} bytes", self.clipboard.len());
         }
