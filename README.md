@@ -134,7 +134,7 @@ blocks.
 cargo run --release                 # launch the GUI
 cargo run --release -- file.bin     # open a file (or device path) on startup
 cargo run --release -- --version    # print version and exit
-cargo test                          # run the test suite (256 tests)
+cargo test                          # run the test suite (282 tests)
 ```
 
 Requires a stable Rust toolchain. Builds on Windows, macOS and Linux.
@@ -199,6 +199,20 @@ user-saved scripts (`bewitched://scripts/…`), reference lists, and a `file://`
 template to read any file as a hex dump — plus **prompts** (`identify-file`,
 `analyze-binary`, `find-secrets`).
 
+### Security
+
+By default the MCP server has **full filesystem access**: an absolute `path`
+argument is passed straight through, so a connected LLM/agent can read and write
+any file the process can. Relative paths resolve against a working directory
+(`get_working_dir` / `set_working_dir`) but that is only a convenience, not a
+sandbox.
+
+To confine the server, set the environment variable `BEWITCHED_MCP_ROOT` to a
+directory before launching it (e.g. `BEWITCHED_MCP_ROOT=/data/samples`). When set,
+every resolved path argument — for both reads and writes — must stay inside that
+root; anything that escapes it (including via `..`) is rejected with a JSON-RPC
+error. Leaving the variable unset preserves the default (unconfined) behavior.
+
 ## Raw disk / RAM access
 
 The **File ▸ Open disk / RAM** menu lists platform device paths
@@ -250,7 +264,7 @@ src/
 
 ## Status
 
-Engine, feature operations and GUI are implemented and covered by **256 tests**
+Engine, feature operations and GUI are implemented and covered by **282 tests**
 (`cargo test`), and the code is clippy-clean. Printing, data-folds/regions,
 CLI file arguments and portable/installable packaging are wired up.
 
