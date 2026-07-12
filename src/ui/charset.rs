@@ -11,7 +11,8 @@ pub enum Charset {
 }
 
 impl Charset {
-    pub const ALL: &'static [Charset] = &[Charset::Ansi, Charset::Dos, Charset::Ebcdic, Charset::Mac];
+    pub const ALL: &'static [Charset] =
+        &[Charset::Ansi, Charset::Dos, Charset::Ebcdic, Charset::Mac];
 
     pub fn name(self) -> &'static str {
         match self {

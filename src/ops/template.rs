@@ -146,12 +146,20 @@ pub fn encode(kind: &EditKind, input: &str) -> Result<Vec<u8>, String> {
         EditKind::F32(le) => {
             let f: f32 = input.trim().parse().map_err(|_| "invalid float")?;
             let b = f.to_le_bytes();
-            Ok(if *le { b.to_vec() } else { b.iter().rev().copied().collect() })
+            Ok(if *le {
+                b.to_vec()
+            } else {
+                b.iter().rev().copied().collect()
+            })
         }
         EditKind::F64(le) => {
             let f: f64 = input.trim().parse().map_err(|_| "invalid float")?;
             let b = f.to_le_bytes();
-            Ok(if *le { b.to_vec() } else { b.iter().rev().copied().collect() })
+            Ok(if *le {
+                b.to_vec()
+            } else {
+                b.iter().rev().copied().collect()
+            })
         }
         EditKind::Ascii => Ok(input.as_bytes().to_vec()),
         EditKind::Hex => crate::ops::search::needle_bytes(
@@ -221,15 +229,27 @@ impl Template {
                     let name = parts.next().ok_or_else(|| err("missing name"))?;
                     let count = parse_count(count);
                     if kw == "ascii" {
-                        stmts.push(Stmt::Ascii { count, name: name.into() });
+                        stmts.push(Stmt::Ascii {
+                            count,
+                            name: name.into(),
+                        });
                     } else {
-                        stmts.push(Stmt::Bytes { count, name: name.into() });
+                        stmts.push(Stmt::Bytes {
+                            count,
+                            name: name.into(),
+                        });
                     }
                 }
                 other => {
                     if let Some(ty) = NumTy::parse(other) {
-                        let name = rest.split_whitespace().next().ok_or_else(|| err("missing name"))?;
-                        stmts.push(Stmt::Num { ty, name: name.into() });
+                        let name = rest
+                            .split_whitespace()
+                            .next()
+                            .ok_or_else(|| err("missing name"))?;
+                        stmts.push(Stmt::Num {
+                            ty,
+                            name: name.into(),
+                        });
                     } else {
                         return Err(err(&format!("unknown statement '{other}'")));
                     }
@@ -261,15 +281,16 @@ pub fn apply(tmpl: &Template, reader: &dyn ByteReader, start: u64) -> Result<Vec
     let mut fields: Vec<Field> = Vec::new();
     let mut vals: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
 
-    let resolve = |c: &Count, vals: &std::collections::HashMap<String, u64>| -> Result<u64, String> {
-        match c {
-            Count::Lit(n) => Ok(*n),
-            Count::Ref(name) => vals
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("unknown length field '{name}'")),
-        }
-    };
+    let resolve =
+        |c: &Count, vals: &std::collections::HashMap<String, u64>| -> Result<u64, String> {
+            match c {
+                Count::Lit(n) => Ok(*n),
+                Count::Ref(name) => vals
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| format!("unknown length field '{name}'")),
+            }
+        };
 
     let read = |pos: u64, n: usize| -> Result<Vec<u8>, String> {
         let buf = reader.read_range(pos, n);
@@ -530,20 +551,38 @@ mod tests {
     #[test]
     fn all_builtins_parse() {
         for (name, src) in BUILTINS {
-            assert!(Template::parse(src).is_ok(), "builtin {name} failed to parse");
+            assert!(
+                Template::parse(src).is_ok(),
+                "builtin {name} failed to parse"
+            );
         }
     }
 
     #[test]
     fn encode_roundtrips() {
-        assert_eq!(encode(&EditKind::Uint(2, true), "258").unwrap(), vec![0x02, 0x01]);
-        assert_eq!(encode(&EditKind::Uint(2, false), "258").unwrap(), vec![0x01, 0x02]);
+        assert_eq!(
+            encode(&EditKind::Uint(2, true), "258").unwrap(),
+            vec![0x02, 0x01]
+        );
+        assert_eq!(
+            encode(&EditKind::Uint(2, false), "258").unwrap(),
+            vec![0x01, 0x02]
+        );
         assert_eq!(encode(&EditKind::Sint(1, true), "-1").unwrap(), vec![0xFF]);
-        assert_eq!(encode(&EditKind::Sint(2, true), "-2").unwrap(), vec![0xFE, 0xFF]);
-        assert_eq!(encode(&EditKind::F32(true), "1.5").unwrap(), 1.5f32.to_le_bytes().to_vec());
+        assert_eq!(
+            encode(&EditKind::Sint(2, true), "-2").unwrap(),
+            vec![0xFE, 0xFF]
+        );
+        assert_eq!(
+            encode(&EditKind::F32(true), "1.5").unwrap(),
+            1.5f32.to_le_bytes().to_vec()
+        );
         assert_eq!(encode(&EditKind::Ascii, "Hi").unwrap(), b"Hi".to_vec());
         assert_eq!(encode(&EditKind::Hex, "DE AD").unwrap(), vec![0xDE, 0xAD]);
-        assert_eq!(encode(&EditKind::Uint(4, true), "0x100").unwrap(), vec![0, 1, 0, 0]);
+        assert_eq!(
+            encode(&EditKind::Uint(4, true), "0x100").unwrap(),
+            vec![0, 1, 0, 0]
+        );
     }
 
     #[test]

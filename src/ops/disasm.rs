@@ -181,7 +181,12 @@ fn disasm_aarch64(code: &[u8], base: u64, count: usize) -> Vec<Insn> {
     })
 }
 
-fn fixed4(code: &[u8], base: u64, count: usize, mut decode: impl FnMut(&[u8]) -> String) -> Vec<Insn> {
+fn fixed4(
+    code: &[u8],
+    base: u64,
+    count: usize,
+    mut decode: impl FnMut(&[u8]) -> String,
+) -> Vec<Insn> {
     let mut out = Vec::with_capacity(count);
     let mut pos = 0usize;
     while pos + 4 <= code.len() && out.len() < count {
@@ -274,7 +279,10 @@ fn disasm_thumb(code: &[u8], base: u64, count: usize) -> Vec<Insn> {
                 let len = (inst.len().to_const() as usize).clamp(2, max);
                 Some((len, inst.to_string()))
             }
-            Err(_) => Some((2, format!(".hword 0x{:04x}", u16::from_le_bytes([rem[0], rem[1]])))),
+            Err(_) => Some((
+                2,
+                format!(".hword 0x{:04x}", u16::from_le_bytes([rem[0], rem[1]])),
+            )),
         }
     })
 }
@@ -295,7 +303,10 @@ fn disasm_msp430(code: &[u8], base: u64, count: usize) -> Vec<Insn> {
                 let len = (inst.len().to_const() as usize).clamp(2, max);
                 Some((len, inst.to_string()))
             }
-            Err(_) => Some((2, format!(".word 0x{:04x}", u16::from_le_bytes([rem[0], rem[1]])))),
+            Err(_) => Some((
+                2,
+                format!(".word 0x{:04x}", u16::from_le_bytes([rem[0], rem[1]])),
+            )),
         }
     })
 }
@@ -417,7 +428,11 @@ mod tests {
         assert_eq!(ins[1].offset, 4);
         assert_eq!(ins[0].bytes, vec![0xC0, 0x03, 0x5F, 0xD6]);
         assert!(ins[0].text.contains("ret"), "got {:?}", ins[0].text);
-        assert!(ins[1].text.contains("nop") || ins[1].text.contains("hint"), "got {:?}", ins[1].text);
+        assert!(
+            ins[1].text.contains("nop") || ins[1].text.contains("hint"),
+            "got {:?}",
+            ins[1].text
+        );
     }
 
     #[test]
@@ -516,7 +531,11 @@ mod tests {
         assert_eq!(ins[0].bytes.len(), 2);
         assert_eq!(ins[1].offset, 2);
         assert_eq!(ins[1].bytes.len(), 1);
-        assert!(ins[0].text.to_lowercase().contains("lda"), "got {:?}", ins[0].text);
+        assert!(
+            ins[0].text.to_lowercase().contains("lda"),
+            "got {:?}",
+            ins[0].text
+        );
     }
 
     #[test]

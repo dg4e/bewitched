@@ -115,7 +115,15 @@ pub fn find_chains(
         // Pointers (whole image) that reference any current frontier node.
         let mut next: Vec<(u64, Vec<u64>)> = Vec::new();
         for (node, tail) in &frontier {
-            let hits = find_pointers_to(reader, image_base, *node, max_offset, 8, max_results, progress);
+            let hits = find_pointers_to(
+                reader,
+                image_base,
+                *node,
+                max_offset,
+                8,
+                max_results,
+                progress,
+            );
             for (ptr_addr, off) in hits {
                 let mut offsets = vec![off];
                 offsets.extend_from_slice(tail);
@@ -210,7 +218,13 @@ mod tests {
         let d = doc(&0x1000u64.to_le_bytes());
         let chains = find_chains(&d, 0, 0x1010, 0, 0, 0x20, 1, 10, &Progress::default());
         assert_eq!(chains.len(), 1);
-        assert_eq!(chains[0], Chain { base: 0, offsets: vec![0x10] });
+        assert_eq!(
+            chains[0],
+            Chain {
+                base: 0,
+                offsets: vec![0x10]
+            }
+        );
         // forward-resolve lands on the target
         assert_eq!(resolve_chain(&d, 0, &chains[0]), Some(0x1010));
     }
@@ -223,7 +237,10 @@ mod tests {
         data[0x100..0x108].copy_from_slice(&0x2000u64.to_le_bytes());
         let d = doc(&data);
         let chains = find_chains(&d, 0, 0x2000, 0, 0x10, 0, 2, 10, &Progress::default());
-        let c = chains.iter().find(|c| c.offsets.len() == 2).expect("a 2-level chain");
+        let c = chains
+            .iter()
+            .find(|c| c.offsets.len() == 2)
+            .expect("a 2-level chain");
         assert_eq!(c.base, 0);
         assert_eq!(resolve_chain(&d, 0, c), Some(0x2000));
     }

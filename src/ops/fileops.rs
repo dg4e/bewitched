@@ -189,7 +189,11 @@ mod tests {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut d = std::env::temp_dir();
-        d.push(format!("bewitched_test_{:?}_{}", std::thread::current().id(), n));
+        d.push(format!(
+            "bewitched_test_{:?}_{}",
+            std::thread::current().id(),
+            n
+        ));
         std::fs::create_dir_all(&d).unwrap();
         d
     }

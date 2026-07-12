@@ -217,17 +217,29 @@ mod tests {
     fn refine_changed_and_unchanged() {
         let mut d = doc(&[1u8, 2, 3, 4]);
         let m = first_scan(&d, &[1], 1, 1000, &Progress::default()); // offset 0
-        // also include other offsets manually
+                                                                     // also include other offsets manually
         let cands = vec![
-            Match { offset: 0, bytes: vec![1] },
-            Match { offset: 1, bytes: vec![2] },
+            Match {
+                offset: 0,
+                bytes: vec![1],
+            },
+            Match {
+                offset: 1,
+                bytes: vec![2],
+            },
         ];
         let _ = m;
         d.overwrite(0, &[9]); // changed
         let changed = refine(&d, &cands, &Refine::Changed, DataType::I8, Endian::Little);
-        assert_eq!(changed.iter().map(|x| x.offset).collect::<Vec<_>>(), vec![0]);
+        assert_eq!(
+            changed.iter().map(|x| x.offset).collect::<Vec<_>>(),
+            vec![0]
+        );
         let unchanged = refine(&d, &cands, &Refine::Unchanged, DataType::I8, Endian::Little);
-        assert_eq!(unchanged.iter().map(|x| x.offset).collect::<Vec<_>>(), vec![1]);
+        assert_eq!(
+            unchanged.iter().map(|x| x.offset).collect::<Vec<_>>(),
+            vec![1]
+        );
     }
 
     #[test]

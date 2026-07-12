@@ -5,7 +5,10 @@
 //! reuse the same `ops` engine as the GUI and MCP server.
 
 use crate::data::Document;
-use crate::ops::{checksum, compress, disasm, export, patch, pointer, scan, search, signatures, stats, strings, Progress};
+use crate::ops::{
+    checksum, compress, disasm, export, patch, pointer, scan, search, signatures, stats, strings,
+    Progress,
+};
 
 /// Result of parsing argv: either a CLI command to run, or "not a CLI command"
 /// (so the caller falls through to the GUI / MCP paths).
@@ -68,9 +71,29 @@ pub fn dispatch(args: &[String]) -> Mode {
 fn is_command(s: &str) -> bool {
     matches!(
         s,
-        "dump" | "sha256" | "md5" | "sha1" | "sha512" | "crc32" | "sum" | "strings" | "search"
-            | "find" | "stats" | "scan" | "sigs" | "disasm" | "pointers" | "export" | "gunzip"
-            | "bps" | "crc" | "struct" | "help" | "--help" | "-h"
+        "dump"
+            | "sha256"
+            | "md5"
+            | "sha1"
+            | "sha512"
+            | "crc32"
+            | "sum"
+            | "strings"
+            | "search"
+            | "find"
+            | "stats"
+            | "scan"
+            | "sigs"
+            | "disasm"
+            | "pointers"
+            | "export"
+            | "gunzip"
+            | "bps"
+            | "crc"
+            | "struct"
+            | "help"
+            | "--help"
+            | "-h"
     )
 }
 
@@ -99,7 +122,10 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
         "dump" => {
             let off = parse_u64(args.get(1)).unwrap_or(0);
             let len = parse_u64(args.get(2)).unwrap_or(256);
-            print!("{}", export::export(&doc, off, len, export::Format::PlainHexDump));
+            print!(
+                "{}",
+                export::export(&doc, off, len, export::Format::PlainHexDump)
+            );
         }
         "sha256" | "md5" | "sha1" | "sha512" | "crc32" => {
             let algo = digest_algo(cmd).unwrap();
@@ -113,7 +139,11 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
                     .map(|a| digest_algo(a).ok_or(format!("unknown algorithm '{a}'")))
                     .collect::<Result<_, _>>()?
             } else {
-                vec![checksum::Algo::Md5, checksum::Algo::Sha1, checksum::Algo::Sha256]
+                vec![
+                    checksum::Algo::Md5,
+                    checksum::Algo::Sha1,
+                    checksum::Algo::Sha256,
+                ]
             };
             let r = checksum::compute(&doc, 0, total, &algos, &Progress::default());
             for (a, v) in r {
@@ -122,7 +152,8 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
         }
         "strings" => {
             let min = parse_u64(args.get(1)).unwrap_or(4) as usize;
-            let found = strings::extract(&doc, 0, total, min.max(1), 1_000_000, &Progress::default());
+            let found =
+                strings::extract(&doc, 0, total, min.max(1), 1_000_000, &Progress::default());
             for f in found {
                 println!("{:#010X}  {}", f.offset, f.text);
             }
@@ -141,7 +172,8 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
             let needle = text.as_bytes();
             let mut from = 0u64;
             let mut count = 0;
-            while let Some(o) = search::find(&doc, needle, from, search::Direction::Forward, false) {
+            while let Some(o) = search::find(&doc, needle, from, search::Direction::Forward, false)
+            {
                 println!("{o:#010X}");
                 from = o + 1;
                 count += 1;
@@ -161,7 +193,13 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
             let ty = search::DataType::from_name(args.get(1).map(|s| s.as_str()).unwrap_or(""))?;
             let value = args.get(2).ok_or("missing VALUE")?;
             let needle = search::needle_bytes(value, ty, search::Endian::Little, false)?;
-            let m = scan::first_scan(&doc, &needle, needle.len() as u64, 1_000_000, &Progress::default());
+            let m = scan::first_scan(
+                &doc,
+                &needle,
+                needle.len() as u64,
+                1_000_000,
+                &Progress::default(),
+            );
             for hit in &m {
                 println!("{:#010X}", hit.offset);
             }
@@ -174,7 +212,8 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
             }
         }
         "disasm" => {
-            let arch = disasm::Arch::from_name(args.get(1).map(|s| s.as_str()).unwrap_or("x86-64"))?;
+            let arch =
+                disasm::Arch::from_name(args.get(1).map(|s| s.as_str()).unwrap_or("x86-64"))?;
             let off = parse_u64(args.get(2)).unwrap_or(0);
             let count = parse_u64(args.get(3)).unwrap_or(32) as usize;
             for i in disasm::disassemble(&doc, off, count, arch) {
@@ -185,7 +224,15 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
         "pointers" => {
             let target = parse_u64(args.get(1)).ok_or("missing TARGET address")?;
             let max_off = parse_u64(args.get(2)).unwrap_or(0x1000);
-            let hits = pointer::find_pointers_to(&doc, 0, target, max_off, 8, 1_000_000, &Progress::default());
+            let hits = pointer::find_pointers_to(
+                &doc,
+                0,
+                target,
+                max_off,
+                8,
+                1_000_000,
+                &Progress::default(),
+            );
             for (addr, off) in &hits {
                 println!("{addr:#010X}  +{off:#X}");
             }
@@ -202,11 +249,16 @@ fn run(cmd: &str, args: &[String]) -> Result<(), String> {
             let data = doc.read_range(0, total as usize);
             let codec = compress::detect(&data).ok_or("could not detect gzip/zlib header")?;
             let out = compress::decompress(&data, codec)?;
-            std::io::stdout().write_all(&out).map_err(|e| e.to_string())?;
+            std::io::stdout()
+                .write_all(&out)
+                .map_err(|e| e.to_string())?;
         }
         "struct" => {
             use crate::ops::kstruct;
-            let key = args.get(1).map(|s| s.to_lowercase()).unwrap_or_else(|| "png".into());
+            let key = args
+                .get(1)
+                .map(|s| s.to_lowercase())
+                .unwrap_or_else(|| "png".into());
             let off = parse_u64(args.get(2)).unwrap_or(0);
             let src = kstruct::BUILTINS
                 .iter()
@@ -260,7 +312,6 @@ fn digest_algo(name: &str) -> Option<checksum::Algo> {
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,7 +320,11 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static C: AtomicU64 = AtomicU64::new(0);
         let mut p = std::env::temp_dir();
-        p.push(format!("bewitched_cli_{:?}_{}.bin", std::thread::current().id(), C.fetch_add(1, Ordering::Relaxed)));
+        p.push(format!(
+            "bewitched_cli_{:?}_{}.bin",
+            std::thread::current().id(),
+            C.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::write(&p, bytes).unwrap();
         p
     }
@@ -311,7 +366,10 @@ mod tests {
     #[test]
     fn unknown_format_errors() {
         let p = tmpfile(b"x");
-        let r = run("export", &[p.to_string_lossy().into_owned(), "nonsense".into()]);
+        let r = run(
+            "export",
+            &[p.to_string_lossy().into_owned(), "nonsense".into()],
+        );
         assert!(r.is_err());
         let _ = std::fs::remove_file(&p);
     }

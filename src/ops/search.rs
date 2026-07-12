@@ -245,7 +245,13 @@ pub fn find(
     }
 }
 
-fn scan_forward(doc: &dyn ByteReader, needle: &[u8], start: u64, end: u64, ci: bool) -> Option<u64> {
+fn scan_forward(
+    doc: &dyn ByteReader,
+    needle: &[u8],
+    start: u64,
+    end: u64,
+    ci: bool,
+) -> Option<u64> {
     let nlen = needle.len() as u64;
     if start + nlen > end {
         return None;
@@ -441,7 +447,10 @@ mod tests {
         let pos = win - 2;
         data[pos..pos + 4].copy_from_slice(b"GANG");
         let doc = d(&data);
-        assert_eq!(find(&doc, b"GANG", 0, Direction::Forward, false), Some(pos as u64));
+        assert_eq!(
+            find(&doc, b"GANG", 0, Direction::Forward, false),
+            Some(pos as u64)
+        );
         assert_eq!(
             find(&doc, b"GANG", data.len() as u64, Direction::Backward, false),
             Some(pos as u64)
@@ -486,7 +495,13 @@ mod tests {
         assert_eq!(doc.to_vec(), b"a_b_c");
 
         let mut doc = d(b"a-b-c");
-        let n = replace_all(&mut doc, b"-", b"", false, &super::super::Progress::default());
+        let n = replace_all(
+            &mut doc,
+            b"-",
+            b"",
+            false,
+            &super::super::Progress::default(),
+        );
         assert_eq!(n, 2);
         assert_eq!(doc.to_vec(), b"abc");
     }

@@ -44,6 +44,10 @@ pub struct Server {
     /// has full filesystem reach — absolute paths bypass it — this just gives
     /// relative paths a stable, agent-controllable anchor (see set_working_dir).
     cwd: PathBuf,
+    /// Optional filesystem confinement root (from `BEWITCHED_MCP_ROOT`).
+    /// `None` = unconfined (default). When set, every resolved path argument
+    /// must stay inside this canonicalized root or the tool call is refused.
+    root: Option<PathBuf>,
 }
 
 impl Default for Server {
@@ -52,6 +56,7 @@ impl Default for Server {
             sessions: HashMap::new(),
             next_id: 0,
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            root: mcp_root_from_env(),
         }
     }
 }
@@ -59,6 +64,16 @@ impl Default for Server {
 impl Server {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Construct a server confined to `root` (test/embedding helper). Equivalent
+    /// to running with `BEWITCHED_MCP_ROOT` set, but without touching global env.
+    #[cfg(test)]
+    fn with_root(root: PathBuf) -> Self {
+        Self {
+            root: Some(root),
+            ..Self::default()
+        }
     }
 
     /// Resolve a path argument: absolute paths are returned unchanged; relative
@@ -74,17 +89,27 @@ impl Server {
 
     /// Return a copy of `args` with every known path key resolved to an absolute
     /// path, so downstream tool code (here and in `call_tool`) needs no changes.
-    fn resolve_path_args(&self, args: &Value) -> Value {
+    ///
+    /// If `BEWITCHED_MCP_ROOT` is set, every resolved path is additionally
+    /// confined to that root; a path that escapes it yields an error and the
+    /// tool call is refused. When the env var is unset, behavior is unchanged.
+    fn resolve_path_args(&self, args: &Value) -> Result<Value, String> {
         let mut a = args.clone();
         if let Some(obj) = a.as_object_mut() {
             for key in PATH_KEYS {
                 if let Some(Value::String(s)) = obj.get(*key) {
-                    let resolved = self.resolve(s).to_string_lossy().into_owned();
+                    let resolved = self.resolve(s);
+                    if let Some(root) = &self.root {
+                        confine_to_root(root, &resolved).map_err(|e| {
+                            format!("path argument '{key}' is outside BEWITCHED_MCP_ROOT: {e}")
+                        })?;
+                    }
+                    let resolved = resolved.to_string_lossy().into_owned();
                     obj.insert((*key).to_string(), Value::String(resolved));
                 }
             }
         }
-        a
+        Ok(a)
     }
 
     /// Run the server loop over stdin/stdout until EOF.
@@ -116,77 +141,85 @@ impl Server {
 
     /// Handle one JSON-RPC request, returning a response (or `None` for notifications).
     pub fn handle(&mut self, req: &Value) -> Option<Value> {
-    let id = req.get("id").cloned().unwrap_or(Value::Null);
-    let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let id = req.get("id").cloned().unwrap_or(Value::Null);
+        let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
-    // Notifications (no id) get no response.
-    req.get("id")?;
+        // Notifications (no id) get no response.
+        req.get("id")?;
 
-    match method {
-        "initialize" => Some(result_response(
-            &id,
-            json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
-                "serverInfo": { "name": "bewitched", "version": env!("CARGO_PKG_VERSION") }
-            }),
-        )),
-        "ping" => Some(result_response(&id, json!({}))),
-        "tools/list" => Some(result_response(&id, json!({ "tools": tools_list() }))),
-        "resources/list" => Some(result_response(&id, json!({ "resources": resources_list() }))),
-        "resources/templates/list" => Some(result_response(
-            &id,
-            json!({ "resourceTemplates": resource_templates_list() }),
-        )),
-        "resources/read" => {
-            let uri = req
-                .get("params")
-                .and_then(|p| p.get("uri"))
-                .and_then(|u| u.as_str())
-                .unwrap_or("");
-            match read_resource(uri, &self.cwd) {
-                Ok(text) => Some(result_response(
-                    &id,
-                    json!({ "contents": [ { "uri": uri, "mimeType": "text/plain", "text": text } ] }),
-                )),
-                Err(e) => Some(error_response(&id, -32602, &e)),
+        match method {
+            "initialize" => Some(result_response(
+                &id,
+                json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
+                    "serverInfo": { "name": "bewitched", "version": env!("CARGO_PKG_VERSION") }
+                }),
+            )),
+            "ping" => Some(result_response(&id, json!({}))),
+            "tools/list" => Some(result_response(&id, json!({ "tools": tools_list() }))),
+            "resources/list" => Some(result_response(
+                &id,
+                json!({ "resources": resources_list() }),
+            )),
+            "resources/templates/list" => Some(result_response(
+                &id,
+                json!({ "resourceTemplates": resource_templates_list() }),
+            )),
+            "resources/read" => {
+                let uri = req
+                    .get("params")
+                    .and_then(|p| p.get("uri"))
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("");
+                match read_resource(uri, &self.cwd) {
+                    Ok(text) => Some(result_response(
+                        &id,
+                        json!({ "contents": [ { "uri": uri, "mimeType": "text/plain", "text": text } ] }),
+                    )),
+                    Err(e) => Some(error_response(&id, -32602, &e)),
+                }
             }
-        }
-        "prompts/list" => Some(result_response(&id, json!({ "prompts": prompts_list() }))),
-        "prompts/get" => {
-            let params = req.get("params").cloned().unwrap_or(Value::Null);
-            let pname = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            let pargs = params.get("arguments").cloned().unwrap_or(json!({}));
-            match get_prompt(pname, &pargs) {
-                Ok(v) => Some(result_response(&id, v)),
-                Err(e) => Some(error_response(&id, -32602, &e)),
+            "prompts/list" => Some(result_response(&id, json!({ "prompts": prompts_list() }))),
+            "prompts/get" => {
+                let params = req.get("params").cloned().unwrap_or(Value::Null);
+                let pname = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let pargs = params.get("arguments").cloned().unwrap_or(json!({}));
+                match get_prompt(pname, &pargs) {
+                    Ok(v) => Some(result_response(&id, v)),
+                    Err(e) => Some(error_response(&id, -32602, &e)),
+                }
             }
-        }
-        "tools/call" => {
-            let params = req.get("params").cloned().unwrap_or(Value::Null);
-            let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
-            let args = params.get("arguments").cloned().unwrap_or(json!({}));
-            match self.dispatch_tool(name, &args) {
-                Ok(text) => Some(result_response(
-                    &id,
-                    json!({ "content": [ { "type": "text", "text": text } ] }),
-                )),
-                Err(e) => Some(result_response(
-                    &id,
-                    json!({ "content": [ { "type": "text", "text": e } ], "isError": true }),
-                )),
+            "tools/call" => {
+                let params = req.get("params").cloned().unwrap_or(Value::Null);
+                let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                match self.dispatch_tool(name, &args) {
+                    Ok(text) => Some(result_response(
+                        &id,
+                        json!({ "content": [ { "type": "text", "text": text } ] }),
+                    )),
+                    Err(e) => Some(result_response(
+                        &id,
+                        json!({ "content": [ { "type": "text", "text": e } ], "isError": true }),
+                    )),
+                }
             }
+            _ => Some(error_response(
+                &id,
+                -32601,
+                &format!("method not found: {method}"),
+            )),
         }
-        _ => Some(error_response(&id, -32601, &format!("method not found: {method}"))),
-    }
     }
 
     /// Dispatch a tool call. Session/write tools use server state; everything
     /// else delegates to the stateless `call_tool`.
     fn dispatch_tool(&mut self, name: &str, args: &Value) -> Result<String, String> {
         // Resolve relative path arguments against the working directory up front,
-        // so every tool (and `call_tool`) sees absolute paths.
-        let args = &self.resolve_path_args(args);
+        // so every tool (and `call_tool`) sees absolute paths. This also enforces
+        // BEWITCHED_MCP_ROOT confinement when that env var is set.
+        let args = &self.resolve_path_args(args)?;
         match name {
             "get_working_dir" => Ok(json!({ "cwd": self.cwd.display().to_string() }).to_string()),
             "set_working_dir" => {
@@ -264,11 +297,11 @@ impl Server {
                     }
                     "session_save" => {
                         let dest = args.get("path").and_then(|p| p.as_str()).map(String::from);
-                        let target = dest.or_else(|| {
-                            doc.path.as_ref().map(|p| p.display().to_string())
-                        });
+                        let target =
+                            dest.or_else(|| doc.path.as_ref().map(|p| p.display().to_string()));
                         let target = target.ok_or("no save path (pass 'path')")?;
-                        doc.save_to(&target).map_err(|e| format!("save failed: {e}"))?;
+                        doc.save_to(&target)
+                            .map_err(|e| format!("save failed: {e}"))?;
                         Ok(json!({ "saved": target }).to_string())
                     }
                     other => Err(format!("unknown session tool: {other}")),
@@ -373,11 +406,18 @@ impl Server {
                 let out = crate::ops::compress::decompress(&data, codec)?;
                 if let Some(outp) = args.get("output").and_then(|p| p.as_str()) {
                     std::fs::write(outp, &out).map_err(|e| format!("write: {e}"))?;
-                    Ok(json!({ "codec": codec.name(), "bytes": out.len(), "output": outp }).to_string())
+                    Ok(
+                        json!({ "codec": codec.name(), "bytes": out.len(), "output": outp })
+                            .to_string(),
+                    )
                 } else {
                     let preview = out.len().min(64 * 1024);
-                    let hex = export::export_bytes(&out[..preview], 0, export::Format::PlainHexDump);
-                    Ok(json!({ "codec": codec.name(), "bytes": out.len(), "hex": hex }).to_string())
+                    let hex =
+                        export::export_bytes(&out[..preview], 0, export::Format::PlainHexDump);
+                    Ok(
+                        json!({ "codec": codec.name(), "bytes": out.len(), "hex": hex })
+                            .to_string(),
+                    )
                 }
             }
             "compress" => {
@@ -389,15 +429,16 @@ impl Server {
                     .get("length")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(doc.len().saturating_sub(off));
-                let codec = crate::ops::compress::Codec::parse(
-                    str_or(args, "codec", "zlib"),
-                )
-                .ok_or("unknown codec")?;
+                let codec = crate::ops::compress::Codec::parse(str_or(args, "codec", "zlib"))
+                    .ok_or("unknown codec")?;
                 let level = u64_arg(args, "level", 6) as u32;
                 let data = doc.read_range(off, len as usize);
                 let out = crate::ops::compress::compress(&data, codec, level);
                 std::fs::write(outp, &out).map_err(|e| format!("write: {e}"))?;
-                Ok(json!({ "codec": codec.name(), "bytes": out.len(), "output": outp }).to_string())
+                Ok(
+                    json!({ "codec": codec.name(), "bytes": out.len(), "output": outp })
+                        .to_string(),
+                )
             }
             "carve" => {
                 let path = str_arg(args, "path")?;
@@ -445,6 +486,81 @@ impl Server {
     }
 }
 
+/// The optional filesystem confinement root (`BEWITCHED_MCP_ROOT`), canonicalized.
+/// `None` means unconfined (the default, backward-compatible behavior). A set but
+/// non-canonicalizable value (e.g. a nonexistent directory) confines to the
+/// literal path so nothing accidentally escapes.
+fn mcp_root_from_env() -> Option<PathBuf> {
+    let raw = std::env::var_os("BEWITCHED_MCP_ROOT")?;
+    if raw.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(&raw);
+    Some(std::fs::canonicalize(&p).unwrap_or(p))
+}
+
+/// Verify that `candidate` (an absolute path that may not yet exist) resolves
+/// inside `root`. Because the leaf may not exist, we canonicalize the deepest
+/// existing ancestor and re-append the remaining components, rejecting any `..`
+/// that would climb above it. Returns `Ok(())` when contained.
+fn confine_to_root(root: &Path, candidate: &Path) -> Result<(), String> {
+    // Walk from the candidate up to the first ancestor that exists on disk.
+    let mut existing = candidate;
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let real = loop {
+        match std::fs::canonicalize(existing) {
+            Ok(r) => break r,
+            Err(_) => match existing.parent() {
+                Some(parent) => {
+                    if let Some(name) = existing.file_name() {
+                        tail.push(name.to_os_string());
+                    }
+                    existing = parent;
+                }
+                // No existing ancestor at all: fall back to a lexical resolution.
+                None => return lexical_confine(root, candidate),
+            },
+        }
+    };
+    // Reattach the not-yet-existing tail (innermost was pushed first).
+    let mut resolved = real;
+    for name in tail.into_iter().rev() {
+        resolved.push(name);
+    }
+    if resolved.starts_with(root) {
+        Ok(())
+    } else {
+        Err(format!("{} escapes {}", resolved.display(), root.display()))
+    }
+}
+
+/// Fallback containment check that normalizes `.`/`..` lexically (no filesystem
+/// access). Used only when the candidate has no existing ancestor to canonicalize.
+fn lexical_confine(root: &Path, candidate: &Path) -> Result<(), String> {
+    use std::path::Component;
+    let mut norm = PathBuf::new();
+    for comp in candidate.components() {
+        match comp {
+            Component::ParentDir => {
+                if !norm.pop() {
+                    return Err(format!(
+                        "{} escapes {}",
+                        candidate.display(),
+                        root.display()
+                    ));
+                }
+            }
+            Component::CurDir => {}
+            other => norm.push(other.as_os_str()),
+        }
+    }
+    if norm.starts_with(root) {
+        Ok(())
+    } else {
+        Err(format!("{} escapes {}", norm.display(), root.display()))
+    }
+}
+
 /// Required string argument; errors with `missing '<key>'` if absent or non-string.
 fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
     args.get(key)
@@ -475,7 +591,10 @@ fn resolve_script(args: &Value) -> Result<String, String> {
     }
     if let Some(name) = args.get("library").and_then(|v| v.as_str()) {
         let key = name.to_lowercase();
-        if let Some((_, s)) = script::LIBRARY.iter().find(|(n, _)| n.to_lowercase().contains(&key)) {
+        if let Some((_, s)) = script::LIBRARY
+            .iter()
+            .find(|(n, _)| n.to_lowercase().contains(&key))
+        {
             return Ok(s.to_string());
         }
         // fall back to a saved user script (exact, then case-insensitive)
@@ -719,6 +838,8 @@ fn tools_list() -> Value {
           "inputSchema": path_schema(json!({
             "type": {"type":"string","description":"text|utf16|hex|i8|i16|i32|i64|f32|f64"},
             "value": {"type":"string"},
+            "endian": {"type":"string","description":"byte order for numeric types: little|big (default little)"},
+            "case_insensitive": {"type":"boolean","description":"case-insensitive match for text (default false)"},
             "max": {"type":"integer","description":"max results (default 100)"} })) },
         { "name": "search_pattern", "description": "Wildcard 'AOB' search: a hex pattern with '?' wildcards, e.g. 'DE ?? BE EF'. Returns match offsets.",
           "inputSchema": path_schema(json!({ "pattern": {"type":"string"}, "max": {"type":"integer"} })) },
@@ -865,10 +986,16 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let len = u64_arg(args, "length", total - off.min(total));
             let params = checksum::CrcParams {
                 width: u64_arg(args, "width", 32) as u32,
-                poly: args.get("poly").and_then(|v| v.as_u64()).ok_or("missing 'poly'")?,
+                poly: args
+                    .get("poly")
+                    .and_then(|v| v.as_u64())
+                    .ok_or("missing 'poly'")?,
                 init: u64_arg(args, "init", 0),
                 refin: args.get("refin").and_then(|v| v.as_bool()).unwrap_or(false),
-                refout: args.get("refout").and_then(|v| v.as_bool()).unwrap_or(false),
+                refout: args
+                    .get("refout")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 xorout: u64_arg(args, "xorout", 0),
             };
             let data = doc.read_range(off, len as usize);
@@ -896,11 +1023,26 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let ty = search::DataType::from_name(str_or(args, "type", "hex"))?;
             let value = str_or(args, "value", "");
             let max = u64_arg(args, "max", 100) as usize;
-            let needle = search::needle_bytes(value, ty, search::Endian::Little, false)?;
+            let endian = match str_or(args, "endian", "little") {
+                "little" | "le" => search::Endian::Little,
+                "big" | "be" => search::Endian::Big,
+                other => return Err(format!("invalid 'endian': {other} (expected little|big)")),
+            };
+            let case_insensitive = args
+                .get("case_insensitive")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let needle = search::needle_bytes(value, ty, endian, case_insensitive)?;
             let mut hits = Vec::new();
             let mut from = 0u64;
             while hits.len() < max {
-                match search::find(&doc, &needle, from, search::Direction::Forward, false) {
+                match search::find(
+                    &doc,
+                    &needle,
+                    from,
+                    search::Direction::Forward,
+                    case_insensitive,
+                ) {
                     Some(o) => {
                         hits.push(o);
                         from = o + 1;
@@ -918,13 +1060,22 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             Ok(json!({ "matches": hits, "count": hits.len() }).to_string())
         }
         "find_pointers" => {
-            let target = args.get("target").and_then(|v| v.as_u64()).ok_or("missing 'target'")?;
+            let target = args
+                .get("target")
+                .and_then(|v| v.as_u64())
+                .ok_or("missing 'target'")?;
             let base = u64_arg(args, "base", 0);
             let max_offset = u64_arg(args, "max_offset", 0x1000);
             let align = u64_arg(args, "align", 8);
             let max = u64_arg(args, "max", 1000) as usize;
             let hits = crate::ops::pointer::find_pointers_to(
-                &doc, base, target, max_offset, align, max, &Progress::default(),
+                &doc,
+                base,
+                target,
+                max_offset,
+                align,
+                max,
+                &Progress::default(),
             );
             let arr: Vec<Value> = hits
                 .iter()
@@ -933,7 +1084,10 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             Ok(json!({ "pointers": arr, "count": arr.len() }).to_string())
         }
         "pointer_chains" => {
-            let target = args.get("target").and_then(|v| v.as_u64()).ok_or("missing 'target'")?;
+            let target = args
+                .get("target")
+                .and_then(|v| v.as_u64())
+                .ok_or("missing 'target'")?;
             let base = u64_arg(args, "base", 0);
             let static_base = u64_arg(args, "static_base", 0);
             let static_window = u64_arg(args, "static_window", 0x10000);
@@ -941,7 +1095,14 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let max_depth = u64_arg(args, "max_depth", 3) as usize;
             let max = u64_arg(args, "max", 50) as usize;
             let chains = crate::ops::pointer::find_chains(
-                &doc, base, target, static_base, static_window, max_offset, max_depth, max,
+                &doc,
+                base,
+                target,
+                static_base,
+                static_window,
+                max_offset,
+                max_depth,
+                max,
                 &Progress::default(),
             );
             let arr: Vec<Value> = chains
@@ -964,7 +1125,9 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let hits = signatures::scan(&doc, 0, total, 1000, &Progress::default());
             let arr: Vec<Value> = hits
                 .into_iter()
-                .map(|h| json!({"offset": h.offset, "category": h.category.label(), "name": h.name}))
+                .map(
+                    |h| json!({"offset": h.offset, "category": h.category.label(), "name": h.name}),
+                )
                 .collect();
             Ok(json!({ "signatures": arr }).to_string())
         }
@@ -975,14 +1138,22 @@ fn call_tool(name: &str, args: &Value) -> Result<String, String> {
             let arr: Vec<Value> = ins
                 .into_iter()
                 .map(|i| {
-                    let bytes = i.bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("");
+                    let bytes = i
+                        .bytes
+                        .iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>()
+                        .join("");
                     json!({"offset": i.offset, "bytes": bytes, "text": i.text})
                 })
                 .collect();
             Ok(json!({ "instructions": arr }).to_string())
         }
         "inspect" => {
-            let le = !args.get("big_endian").and_then(|v| v.as_bool()).unwrap_or(false);
+            let le = !args
+                .get("big_endian")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let window = doc.read_range(off, 16);
             let interps = inspect::inspect(&window, le);
             let map: serde_json::Map<String, Value> = interps
@@ -1060,7 +1231,11 @@ fn parse_algos(v: Option<&Value>) -> Vec<checksum::Algo> {
         if let Some(name) = item.as_str() {
             let n = name.to_lowercase().replace(['-', '_', '/'], "");
             for a in checksum::Algo::ALL {
-                if a.name().to_lowercase().replace(['-', '_', '/'], "").contains(&n) {
+                if a.name()
+                    .to_lowercase()
+                    .replace(['-', '_', '/'], "")
+                    .contains(&n)
+                {
                     out.push(*a);
                     break;
                 }
@@ -1073,7 +1248,6 @@ fn parse_algos(v: Option<&Value>) -> Vec<checksum::Algo> {
         out
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1094,19 +1268,25 @@ mod tests {
 
     #[test]
     fn initialize_advertises_server() {
-        let resp = Server::new().handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize"})).unwrap();
+        let resp = Server::new()
+            .handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize"}))
+            .unwrap();
         assert_eq!(resp["result"]["serverInfo"]["name"], "bewitched");
         assert_eq!(resp["result"]["protocolVersion"], PROTOCOL_VERSION);
     }
 
     #[test]
     fn notifications_get_no_response() {
-        assert!(Server::new().handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"})).is_none());
+        assert!(Server::new()
+            .handle(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
+            .is_none());
     }
 
     #[test]
     fn tools_list_nonempty() {
-        let resp = Server::new().handle(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"})).unwrap();
+        let resp = Server::new()
+            .handle(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
+            .unwrap();
         let tools = resp["result"]["tools"].as_array().unwrap();
         assert!(tools.len() >= 10);
         assert!(tools.iter().any(|t| t["name"] == "disassemble"));
@@ -1114,7 +1294,9 @@ mod tests {
 
     #[test]
     fn initialize_advertises_resources_and_prompts() {
-        let resp = Server::new().handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize"})).unwrap();
+        let resp = Server::new()
+            .handle(&json!({"jsonrpc":"2.0","id":1,"method":"initialize"}))
+            .unwrap();
         let caps = &resp["result"]["capabilities"];
         assert!(caps.get("resources").is_some());
         assert!(caps.get("prompts").is_some());
@@ -1123,22 +1305,33 @@ mod tests {
     #[test]
     fn resources_list_and_read() {
         let mut s = Server::new();
-        let list = s.handle(&json!({"jsonrpc":"2.0","id":1,"method":"resources/list"})).unwrap();
+        let list = s
+            .handle(&json!({"jsonrpc":"2.0","id":1,"method":"resources/list"}))
+            .unwrap();
         let res = list["result"]["resources"].as_array().unwrap();
-        assert!(res.iter().any(|r| r["uri"] == "bewitched://reference/architectures"));
+        assert!(res
+            .iter()
+            .any(|r| r["uri"] == "bewitched://reference/architectures"));
         // read the template PNG source
-        let read = s.handle(&json!({
-            "jsonrpc":"2.0","id":2,"method":"resources/read",
-            "params":{"uri":"bewitched://templates/PNG image"}
-        })).unwrap();
+        let read = s
+            .handle(&json!({
+                "jsonrpc":"2.0","id":2,"method":"resources/read",
+                "params":{"uri":"bewitched://templates/PNG image"}
+            }))
+            .unwrap();
         let text = read["result"]["contents"][0]["text"].as_str().unwrap();
         assert!(text.contains("ihdr_type"));
         // read the arch reference
-        let arch = s.handle(&json!({
-            "jsonrpc":"2.0","id":3,"method":"resources/read",
-            "params":{"uri":"bewitched://reference/architectures"}
-        })).unwrap();
-        assert!(arch["result"]["contents"][0]["text"].as_str().unwrap().contains("ARM64"));
+        let arch = s
+            .handle(&json!({
+                "jsonrpc":"2.0","id":3,"method":"resources/read",
+                "params":{"uri":"bewitched://reference/architectures"}
+            }))
+            .unwrap();
+        assert!(arch["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("ARM64"));
     }
 
     #[test]
@@ -1155,12 +1348,20 @@ mod tests {
         data.extend_from_slice(&44100u32.to_le_bytes());
         data.resize(44, 0);
         let p = tmpfile(&data);
-        let resp = call(&mut Server::new(), "parse_struct", json!({
-            "path": p.to_str().unwrap(), "builtin": "WAV"
-        }));
+        let resp = call(
+            &mut Server::new(),
+            "parse_struct",
+            json!({
+                "path": p.to_str().unwrap(), "builtin": "WAV"
+            }),
+        );
         // find the channels field in the tree
-        let chans = resp["children"].as_array().unwrap().iter()
-            .find(|c| c["name"] == "channels").unwrap();
+        let chans = resp["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "channels")
+            .unwrap();
         assert_eq!(chans["value"], "2");
         let _ = std::fs::remove_file(&p);
     }
@@ -1168,44 +1369,65 @@ mod tests {
     #[test]
     fn file_resource_template_and_read() {
         let mut s = Server::new();
-        let tl = s.handle(&json!({"jsonrpc":"2.0","id":1,"method":"resources/templates/list"})).unwrap();
+        let tl = s
+            .handle(&json!({"jsonrpc":"2.0","id":1,"method":"resources/templates/list"}))
+            .unwrap();
         let temps = tl["result"]["resourceTemplates"].as_array().unwrap();
         assert!(temps.iter().any(|t| t["uriTemplate"] == "file://{path}"));
 
         let p = tmpfile(&[0xDE, 0xAD, 0xBE, 0xEF]);
         let uri = format!("file://{}", p.to_str().unwrap());
-        let read = s.handle(&json!({
-            "jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri": uri}
-        })).unwrap();
-        assert!(read["result"]["contents"][0]["text"].as_str().unwrap().contains("DE AD BE EF"));
+        let read = s
+            .handle(&json!({
+                "jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri": uri}
+            }))
+            .unwrap();
+        assert!(read["result"]["contents"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("DE AD BE EF"));
         let _ = std::fs::remove_file(&p);
     }
 
     #[test]
     fn resources_read_unknown_errors() {
-        let resp = Server::new().handle(&json!({
-            "jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"bewitched://nope"}
-        })).unwrap();
+        let resp = Server::new()
+            .handle(&json!({
+                "jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"bewitched://nope"}
+            }))
+            .unwrap();
         assert_eq!(resp["error"]["code"], -32602);
     }
 
     #[test]
     fn prompts_list_and_get() {
         let mut s = Server::new();
-        let list = s.handle(&json!({"jsonrpc":"2.0","id":1,"method":"prompts/list"})).unwrap();
-        assert!(list["result"]["prompts"].as_array().unwrap().iter().any(|p| p["name"] == "analyze-binary"));
-        let got = s.handle(&json!({
-            "jsonrpc":"2.0","id":2,"method":"prompts/get",
-            "params":{"name":"identify-file","arguments":{"path":"/tmp/x.bin"}}
-        })).unwrap();
-        let text = got["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+        let list = s
+            .handle(&json!({"jsonrpc":"2.0","id":1,"method":"prompts/list"}))
+            .unwrap();
+        assert!(list["result"]["prompts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "analyze-binary"));
+        let got = s
+            .handle(&json!({
+                "jsonrpc":"2.0","id":2,"method":"prompts/get",
+                "params":{"name":"identify-file","arguments":{"path":"/tmp/x.bin"}}
+            }))
+            .unwrap();
+        let text = got["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap();
         assert!(text.contains("/tmp/x.bin"));
         assert!(text.contains("signatures"));
     }
 
     #[test]
     fn unknown_method_errors() {
-        let resp = Server::new().handle(&json!({"jsonrpc":"2.0","id":3,"method":"bogus"})).unwrap();
+        let resp = Server::new()
+            .handle(&json!({"jsonrpc":"2.0","id":3,"method":"bogus"}))
+            .unwrap();
         assert_eq!(resp["error"]["code"], -32601);
     }
 
@@ -1219,7 +1441,10 @@ mod tests {
         .unwrap();
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         let v: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(v["SHA-256"], "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            v["SHA-256"],
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
         assert_eq!(v["CRC-32"], "352441C2");
         let _ = std::fs::remove_file(&p);
     }
@@ -1227,11 +1452,16 @@ mod tests {
     #[test]
     fn tools_call_read_hex_and_disasm() {
         let p = tmpfile(&[0x48, 0x31, 0xC0, 0x90, 0xC3]);
-        let hex = Server::new().handle(&json!({
-            "jsonrpc":"2.0","id":5,"method":"tools/call",
-            "params":{"name":"read_hex","arguments":{"path": p.to_str().unwrap(),"length":5}}
-        })).unwrap();
-        assert!(hex["result"]["content"][0]["text"].as_str().unwrap().contains("48 31 C0"));
+        let hex = Server::new()
+            .handle(&json!({
+                "jsonrpc":"2.0","id":5,"method":"tools/call",
+                "params":{"name":"read_hex","arguments":{"path": p.to_str().unwrap(),"length":5}}
+            }))
+            .unwrap();
+        assert!(hex["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("48 31 C0"));
 
         let dis = Server::new().handle(&json!({
             "jsonrpc":"2.0","id":6,"method":"tools/call",
@@ -1249,9 +1479,13 @@ mod tests {
         data.extend_from_slice(&0x1000u64.to_le_bytes());
         data.extend_from_slice(&0x0FF0u64.to_le_bytes());
         let p = tmpfile(&data);
-        let resp = call(&mut Server::new(), "find_pointers", json!({
-            "path": p.to_str().unwrap(), "target": 0x1000, "max_offset": 0x20
-        }));
+        let resp = call(
+            &mut Server::new(),
+            "find_pointers",
+            json!({
+                "path": p.to_str().unwrap(), "target": 0x1000, "max_offset": 0x20
+            }),
+        );
         assert_eq!(resp["count"], 2);
         assert_eq!(resp["pointers"][1], json!({"address": 8, "offset": 0x10}));
         let _ = std::fs::remove_file(&p);
@@ -1261,10 +1495,14 @@ mod tests {
     fn pointer_chains_tool() {
         let d = 0x1000u64.to_le_bytes();
         let p = tmpfile(&d);
-        let resp = call(&mut Server::new(), "pointer_chains", json!({
-            "path": p.to_str().unwrap(), "target": 0x1010, "static_base": 0,
-            "static_window": 0, "max_offset": 0x20, "max_depth": 1
-        }));
+        let resp = call(
+            &mut Server::new(),
+            "pointer_chains",
+            json!({
+                "path": p.to_str().unwrap(), "target": 0x1010, "static_base": 0,
+                "static_window": 0, "max_offset": 0x20, "max_depth": 1
+            }),
+        );
         assert_eq!(resp["count"], 1);
         assert_eq!(resp["chains"][0]["offsets"], json!([0x10]));
         let _ = std::fs::remove_file(&p);
@@ -1275,19 +1513,29 @@ mod tests {
         let a = tmpfile(b"AAAAAAAA");
         let b = tmpfile(b"AABBAAAA");
         let mut s = Server::new();
-        let cmp = call(&mut s, "compare", json!({"path_a": a.to_str().unwrap(), "path_b": b.to_str().unwrap()}));
+        let cmp = call(
+            &mut s,
+            "compare",
+            json!({"path_a": a.to_str().unwrap(), "path_b": b.to_str().unwrap()}),
+        );
         assert_eq!(cmp["equal"], false);
         assert_eq!(cmp["ranges"][0]["offset"], 2);
         assert_eq!(cmp["ranges"][0]["len"], 2);
 
         // carve bytes 2..4 of b into a new file
         let out = tmpfile(b"");
-        let carved = call(&mut s, "carve", json!({
-            "path": b.to_str().unwrap(), "offset": 2, "length": 2, "output": out.to_str().unwrap()
-        }));
+        let carved = call(
+            &mut s,
+            "carve",
+            json!({
+                "path": b.to_str().unwrap(), "offset": 2, "length": 2, "output": out.to_str().unwrap()
+            }),
+        );
         assert_eq!(carved["carved"], 2);
         assert_eq!(std::fs::read(&out).unwrap(), b"BB");
-        for f in [a, b, out] { let _ = std::fs::remove_file(&f); }
+        for f in [a, b, out] {
+            let _ = std::fs::remove_file(&f);
+        }
     }
 
     #[test]
@@ -1296,21 +1544,31 @@ mod tests {
         let modi = tmpfile(b"the QUICK brown fox!");
         let patch = tmpfile(b"");
         let mut s = Server::new();
-        let made = call(&mut s, "bps_create", json!({
-            "original": orig.to_str().unwrap(),
-            "modified": modi.to_str().unwrap(),
-            "output": patch.to_str().unwrap(),
-        }));
+        let made = call(
+            &mut s,
+            "bps_create",
+            json!({
+                "original": orig.to_str().unwrap(),
+                "modified": modi.to_str().unwrap(),
+                "output": patch.to_str().unwrap(),
+            }),
+        );
         assert!(made["patch_bytes"].as_u64().unwrap() > 16);
         // apply onto a copy of the original
         let target = tmpfile(b"the quick brown fox");
-        let applied = call(&mut s, "bps_apply", json!({
-            "path": target.to_str().unwrap(),
-            "patch": patch.to_str().unwrap(),
-        }));
+        let applied = call(
+            &mut s,
+            "bps_apply",
+            json!({
+                "path": target.to_str().unwrap(),
+                "patch": patch.to_str().unwrap(),
+            }),
+        );
         assert_eq!(applied["bytes"], 20);
         assert_eq!(std::fs::read(&target).unwrap(), b"the QUICK brown fox!");
-        for f in [orig, modi, patch, target] { let _ = std::fs::remove_file(&f); }
+        for f in [orig, modi, patch, target] {
+            let _ = std::fs::remove_file(&f);
+        }
     }
 
     #[test]
@@ -1321,27 +1579,41 @@ mod tests {
         let out = tmpfile(b"");
         let mut s = Server::new();
         // compress p -> zp (zlib)
-        let c = call(&mut s, "compress", json!({
-            "path": p.to_str().unwrap(), "codec": "zlib", "output": zp.to_str().unwrap()
-        }));
+        let c = call(
+            &mut s,
+            "compress",
+            json!({
+                "path": p.to_str().unwrap(), "codec": "zlib", "output": zp.to_str().unwrap()
+            }),
+        );
         assert_eq!(c["codec"], "zlib");
         assert!((c["bytes"].as_u64().unwrap() as usize) < original.len());
         // decompress zp -> out (auto-detect)
-        let d = call(&mut s, "decompress", json!({
-            "path": zp.to_str().unwrap(), "output": out.to_str().unwrap()
-        }));
+        let d = call(
+            &mut s,
+            "decompress",
+            json!({
+                "path": zp.to_str().unwrap(), "output": out.to_str().unwrap()
+            }),
+        );
         assert_eq!(d["codec"], "zlib");
         assert_eq!(std::fs::read(&out).unwrap(), original);
-        for f in [p, zp, out] { let _ = std::fs::remove_file(&f); }
+        for f in [p, zp, out] {
+            let _ = std::fs::remove_file(&f);
+        }
     }
 
     #[test]
     fn custom_crc_tool() {
         let p = tmpfile(b"123456789");
-        let resp = call(&mut Server::new(), "custom_crc", json!({
-            "path": p.to_str().unwrap(), "width": 32, "poly": 0x04C11DB7,
-            "init": 0xFFFFFFFFu64, "refin": true, "refout": true, "xorout": 0xFFFFFFFFu64
-        }));
+        let resp = call(
+            &mut Server::new(),
+            "custom_crc",
+            json!({
+                "path": p.to_str().unwrap(), "width": 32, "poly": 0x04C11DB7,
+                "init": 0xFFFFFFFFu64, "refin": true, "refout": true, "xorout": 0xFFFFFFFFu64
+            }),
+        );
         assert_eq!(resp["hex"], "CBF43926");
         let _ = std::fs::remove_file(&p);
     }
@@ -1353,27 +1625,36 @@ mod tests {
         let h = call(&mut s, "histogram", json!({"path": p.to_str().unwrap()}));
         assert_eq!(h["counts"][0], 100);
         assert_eq!(h["entropy_bits_per_byte"], 0.0);
-        let em = call(&mut s, "entropy_map", json!({"path": p.to_str().unwrap(), "buckets": 4}));
+        let em = call(
+            &mut s,
+            "entropy_map",
+            json!({"path": p.to_str().unwrap(), "buckets": 4}),
+        );
         assert_eq!(em["entropy"].as_array().unwrap().len(), 4);
         let _ = std::fs::remove_file(&p);
     }
 
     #[test]
     fn tool_error_is_reported() {
-        let resp = Server::new().handle(&json!({
-            "jsonrpc":"2.0","id":7,"method":"tools/call",
-            "params":{"name":"read_hex","arguments":{"path":"/nonexistent/xyz"}}
-        }))
-        .unwrap();
+        let resp = Server::new()
+            .handle(&json!({
+                "jsonrpc":"2.0","id":7,"method":"tools/call",
+                "params":{"name":"read_hex","arguments":{"path":"/nonexistent/xyz"}}
+            }))
+            .unwrap();
         assert_eq!(resp["result"]["isError"], true);
     }
 
     #[test]
     fn search_pattern_wildcards() {
         let p = tmpfile(&[0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0x99, 0xBE, 0xEF]);
-        let resp = call(&mut Server::new(), "search_pattern", json!({
-            "path": p.to_str().unwrap(), "pattern": "DE ?? BE EF"
-        }));
+        let resp = call(
+            &mut Server::new(),
+            "search_pattern",
+            json!({
+                "path": p.to_str().unwrap(), "pattern": "DE ?? BE EF"
+            }),
+        );
         assert_eq!(resp["matches"], json!([1, 5]));
         let _ = std::fs::remove_file(&p);
     }
@@ -1389,6 +1670,47 @@ mod tests {
         let text = resp["result"]["content"][0]["text"].as_str().unwrap();
         let v: Value = serde_json::from_str(text).unwrap();
         assert_eq!(v["matches"], json!([2, 10]));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn search_honors_endianness() {
+        // i32 value 1 => LE 01 00 00 00, BE 00 00 00 01
+        let p = tmpfile(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]);
+        let mut s = Server::new();
+        let le = call(
+            &mut s,
+            "search",
+            json!({"path": p.to_str().unwrap(), "type": "i32", "value": "1", "endian": "little"}),
+        );
+        assert_eq!(le["matches"], json!([0]));
+        let be = call(
+            &mut s,
+            "search",
+            json!({"path": p.to_str().unwrap(), "type": "i32", "value": "1", "endian": "big"}),
+        );
+        assert_eq!(be["matches"], json!([4]));
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn search_case_insensitive() {
+        let p = tmpfile(b"--NeEdLe--");
+        let mut s = Server::new();
+        // case-sensitive (default) finds nothing
+        let cs = call(
+            &mut s,
+            "search",
+            json!({"path": p.to_str().unwrap(), "type": "text", "value": "needle"}),
+        );
+        assert_eq!(cs["count"], 0);
+        // case-insensitive finds it
+        let ci = call(
+            &mut s,
+            "search",
+            json!({"path": p.to_str().unwrap(), "type": "text", "value": "needle", "case_insensitive": true}),
+        );
+        assert_eq!(ci["matches"], json!([2]));
         let _ = std::fs::remove_file(&p);
     }
 
@@ -1409,10 +1731,18 @@ mod tests {
         let id = opened["session"].as_u64().unwrap();
         assert_eq!(opened["length"], 8);
         // overwrite 2 bytes at offset 2
-        let w = call(&mut s, "session_write", json!({"session": id, "offset": 2, "hex": "4242"}));
+        let w = call(
+            &mut s,
+            "session_write",
+            json!({"session": id, "offset": 2, "hex": "4242"}),
+        );
         assert_eq!(w["written"], 2);
         // insert grows the doc
-        let ins = call(&mut s, "session_insert", json!({"session": id, "offset": 0, "hex": "FF"}));
+        let ins = call(
+            &mut s,
+            "session_insert",
+            json!({"session": id, "offset": 0, "hex": "FF"}),
+        );
         assert_eq!(ins["length"], 9);
         // undo the insert
         let u = call(&mut s, "session_undo", json!({"session": id}));
@@ -1423,10 +1753,12 @@ mod tests {
         assert_eq!(saved, b"AABBAAAA"); // bytes 2,3 overwritten with 0x42
         call(&mut s, "session_close", json!({"session": id}));
         // session is gone now
-        let resp = s.handle(&json!({
-            "jsonrpc":"2.0","id":2,"method":"tools/call",
-            "params":{"name":"session_read","arguments":{"session": id}}
-        })).unwrap();
+        let resp = s
+            .handle(&json!({
+                "jsonrpc":"2.0","id":2,"method":"tools/call",
+                "params":{"name":"session_read","arguments":{"session": id}}
+            }))
+            .unwrap();
         assert_eq!(resp["result"]["isError"], true);
         let _ = std::fs::remove_file(&p);
     }
@@ -1436,10 +1768,14 @@ mod tests {
         let p = tmpfile(&[0x00, 0x0F, 0xF0, 0xFF]);
         let mut s = Server::new();
         // XOR every byte with 0xFF via inline source
-        let r = call(&mut s, "script", json!({
-            "path": p.to_str().unwrap(),
-            "source": "for i in 0..len() { write(i, read(i) ^ 0xFF); }",
-        }));
+        let r = call(
+            &mut s,
+            "script",
+            json!({
+                "path": p.to_str().unwrap(),
+                "source": "for i in 0..len() { write(i, read(i) ^ 0xFF); }",
+            }),
+        );
         assert_eq!(r["saved"], true);
         assert_eq!(std::fs::read(&p).unwrap(), vec![0xFF, 0xF0, 0x0F, 0x00]);
         let _ = std::fs::remove_file(&p);
@@ -1450,16 +1786,24 @@ mod tests {
         let p = tmpfile(b"abcdef");
         let mut s = Server::new();
         // library lookup + a script that prints and adds a region
-        let r = call(&mut s, "script", json!({
-            "path": p.to_str().unwrap(),
-            "source": "print(\"len \" + len()); add_region(0, 3, \"head\");",
-        }));
+        let r = call(
+            &mut s,
+            "script",
+            json!({
+                "path": p.to_str().unwrap(),
+                "source": "print(\"len \" + len()); add_region(0, 3, \"head\");",
+            }),
+        );
         assert!(r["output"].as_str().unwrap().contains("len 6"));
         assert_eq!(r["regions"][0]["label"], "head");
         // library by name
-        let r2 = call(&mut s, "script", json!({
-            "path": p.to_str().unwrap(), "library": "uppercase",
-        }));
+        let r2 = call(
+            &mut s,
+            "script",
+            json!({
+                "path": p.to_str().unwrap(), "library": "uppercase",
+            }),
+        );
         assert_eq!(r2["saved"], true);
         assert_eq!(std::fs::read(&p).unwrap(), b"ABCDEF");
         let _ = std::fs::remove_file(&p);
@@ -1469,8 +1813,14 @@ mod tests {
     fn session_script_tool() {
         let p = tmpfile(b"hello");
         let mut s = Server::new();
-        let id = call(&mut s, "open", json!({"path": p.to_str().unwrap()}))["session"].as_u64().unwrap();
-        call(&mut s, "session_script", json!({"session": id, "library": "uppercase"}));
+        let id = call(&mut s, "open", json!({"path": p.to_str().unwrap()}))["session"]
+            .as_u64()
+            .unwrap();
+        call(
+            &mut s,
+            "session_script",
+            json!({"session": id, "library": "uppercase"}),
+        );
         call(&mut s, "session_save", json!({"session": id}));
         assert_eq!(std::fs::read(&p).unwrap(), b"HELLO");
         let _ = std::fs::remove_file(&p);
@@ -1480,10 +1830,18 @@ mod tests {
     fn write_bytes_and_transform_tools() {
         let p = tmpfile(&[0x00, 0x0F, 0xF0, 0xFF]);
         let mut s = Server::new();
-        call(&mut s, "write_bytes", json!({"path": p.to_str().unwrap(), "offset": 0, "hex": "AA"}));
+        call(
+            &mut s,
+            "write_bytes",
+            json!({"path": p.to_str().unwrap(), "offset": 0, "hex": "AA"}),
+        );
         assert_eq!(std::fs::read(&p).unwrap(), vec![0xAA, 0x0F, 0xF0, 0xFF]);
         // XOR the whole file with 0xFF
-        call(&mut s, "transform", json!({"path": p.to_str().unwrap(), "op": "xor", "key": 0xFF}));
+        call(
+            &mut s,
+            "transform",
+            json!({"path": p.to_str().unwrap(), "op": "xor", "key": 0xFF}),
+        );
         assert_eq!(std::fs::read(&p).unwrap(), vec![0x55, 0xF0, 0x0F, 0x00]);
         let _ = std::fs::remove_file(&p);
     }
@@ -1494,18 +1852,26 @@ mod tests {
         let modi = tmpfile(b"the QUICK brown fox");
         let patch = tmpfile(b""); // reuse path
         let mut s = Server::new();
-        let made = call(&mut s, "patch_create", json!({
-            "original": orig.to_str().unwrap(),
-            "modified": modi.to_str().unwrap(),
-            "output": patch.to_str().unwrap(),
-        }));
+        let made = call(
+            &mut s,
+            "patch_create",
+            json!({
+                "original": orig.to_str().unwrap(),
+                "modified": modi.to_str().unwrap(),
+                "output": patch.to_str().unwrap(),
+            }),
+        );
         assert!(made["patch_bytes"].as_u64().unwrap() > 8);
         // apply the patch back onto a copy of the original
         let target = tmpfile(b"the quick brown fox");
-        let applied = call(&mut s, "patch_apply", json!({
-            "path": target.to_str().unwrap(),
-            "patch": patch.to_str().unwrap(),
-        }));
+        let applied = call(
+            &mut s,
+            "patch_apply",
+            json!({
+                "path": target.to_str().unwrap(),
+                "patch": patch.to_str().unwrap(),
+            }),
+        );
         assert!(applied["records"].as_u64().unwrap() >= 1);
         assert_eq!(std::fs::read(&target).unwrap(), b"the QUICK brown fox");
         for f in [orig, modi, patch, target] {
@@ -1533,16 +1899,26 @@ mod tests {
         let mut s = Server::new();
 
         // get_working_dir reports a directory by default.
-        assert!(call(&mut s, "get_working_dir", json!({}))["cwd"].as_str().is_some());
+        assert!(call(&mut s, "get_working_dir", json!({}))["cwd"]
+            .as_str()
+            .is_some());
 
         // cd into the temp dir.
-        let set = call(&mut s, "set_working_dir", json!({ "path": dir.to_str().unwrap() }));
+        let set = call(
+            &mut s,
+            "set_working_dir",
+            json!({ "path": dir.to_str().unwrap() }),
+        );
         assert!(set["cwd"].as_str().is_some());
 
         // A RELATIVE path now resolves against the working dir, identically to the
         // absolute path — proving relative resolution works while absolute still
         // works "wild" regardless of cwd.
-        let rel = call(&mut s, "read_hex", json!({ "path": "sample.bin", "length": 4 }));
+        let rel = call(
+            &mut s,
+            "read_hex",
+            json!({ "path": "sample.bin", "length": 4 }),
+        );
         let abs = call(
             &mut s,
             "read_hex",
@@ -1570,12 +1946,90 @@ mod tests {
     fn set_working_dir_then_relative_missing_file_errors() {
         let dir = tmpdir();
         let mut s = Server::new();
-        call(&mut s, "set_working_dir", json!({ "path": dir.to_str().unwrap() }));
+        call(
+            &mut s,
+            "set_working_dir",
+            json!({ "path": dir.to_str().unwrap() }),
+        );
         let resp = s
             .handle(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
                 "params":{"name":"read_hex","arguments":{"path":"nope.bin"}}}))
             .unwrap();
         assert_eq!(resp["result"]["isError"], json!(true));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Pure containment logic — no env, no races.
+    #[test]
+    fn confine_to_root_logic() {
+        let root = std::env::temp_dir();
+        let root = std::fs::canonicalize(&root).unwrap();
+        // inside (existing) is allowed
+        assert!(confine_to_root(&root, &root.join("some_file.bin")).is_ok());
+        // a not-yet-existing nested leaf inside root is allowed
+        assert!(confine_to_root(&root, &root.join("newdir/leaf.bin")).is_ok());
+        // climbing out with .. is rejected
+        assert!(confine_to_root(&root, &root.join("../escape.bin")).is_err());
+        // a sibling absolute path outside root is rejected
+        assert!(confine_to_root(&root, Path::new("/etc/passwd")).is_err());
+    }
+
+    #[test]
+    fn mcp_root_confines_reads_and_writes() {
+        // Canonicalize so symlinked temp roots (macOS /var -> /private/var) compare equal.
+        let root = std::fs::canonicalize(tmpdir()).unwrap();
+        let inside = root.join("inside.bin");
+        std::fs::write(&inside, b"hello world").unwrap();
+
+        let mut s = Server::with_root(root.clone());
+        // read inside the root: allowed (returns a hex-dump string)
+        let ok = call(
+            &mut s,
+            "read_hex",
+            json!({ "path": inside.to_str().unwrap() }),
+        );
+        assert!(ok.is_string() && !ok.as_str().unwrap().is_empty());
+
+        // read outside the root: refused with a clear error
+        let resp = s
+            .handle(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call",
+                "params":{"name":"read_hex","arguments":{"path":"/etc/hosts"}}}))
+            .unwrap();
+        assert_eq!(resp["result"]["isError"], json!(true));
+        let msg = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(msg.contains("BEWITCHED_MCP_ROOT"), "got: {msg}");
+
+        // a write (carve output) outside the root is refused
+        let resp = s
+            .handle(&json!({"jsonrpc":"2.0","id":2,"method":"tools/call",
+                "params":{"name":"carve","arguments":{
+                    "path": inside.to_str().unwrap(), "offset": 0, "length": 4,
+                    "output": "/tmp/escape_carve.bin"}}}))
+            .unwrap();
+        assert_eq!(resp["result"]["isError"], json!(true));
+
+        // a write inside the root is allowed
+        let out = root.join("carved.bin");
+        let ok = call(
+            &mut s,
+            "carve",
+            json!({ "path": inside.to_str().unwrap(), "offset": 0, "length": 5,
+                    "output": out.to_str().unwrap() }),
+        );
+        assert!(ok.is_object() || ok.is_string());
+        assert!(out.exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn no_mcp_root_is_unconfined() {
+        // A default server (no root) resolves an absolute path anywhere.
+        let p = tmpfile(b"unconfined");
+        let mut s = Server::new();
+        s.root = None; // ensure unconfined regardless of ambient env
+        let ok = call(&mut s, "read_hex", json!({ "path": p.to_str().unwrap() }));
+        assert!(ok.is_string() && !ok.as_str().unwrap().is_empty());
+        let _ = std::fs::remove_file(&p);
     }
 }

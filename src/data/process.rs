@@ -25,7 +25,9 @@ pub struct MemRegion {
 
 impl MemRegion {
     pub fn end(&self) -> u64 {
-        self.base + self.size
+        // `base`/`size` come from the OS region walker; a region at the very top
+        // of the address space could otherwise overflow.
+        self.base.saturating_add(self.size)
     }
 }
 
@@ -194,9 +196,8 @@ mod imp {
                 let mut size: mach_vm_size_t = 0;
                 let mut info: vm_region_basic_info_64 = unsafe { std::mem::zeroed() };
                 // VM_REGION_BASIC_INFO_COUNT_64 = sizeof(info) / sizeof(int)
-                let mut count: u32 =
-                    (std::mem::size_of::<vm_region_basic_info_64>() / std::mem::size_of::<i32>())
-                        as u32;
+                let mut count: u32 = (std::mem::size_of::<vm_region_basic_info_64>()
+                    / std::mem::size_of::<i32>()) as u32;
                 let mut object: mach_port_t = 0;
                 let kr = unsafe {
                     mach_vm_region(
@@ -220,7 +221,7 @@ mod imp {
                     writable: prot & mach2::vm_prot::VM_PROT_WRITE != 0,
                     executable: prot & mach2::vm_prot::VM_PROT_EXECUTE != 0,
                 });
-                addr += size;
+                addr = addr.saturating_add(size);
                 if out.len() > 100_000 {
                     break;
                 }
@@ -288,16 +289,19 @@ mod imp {
                 let Some(range) = it.next() else { continue };
                 let Some(perms) = it.next() else { continue };
                 let mut rr = range.split('-');
-                let (Some(a), Some(b)) = (rr.next(), rr.next()) else { continue };
-                let (Ok(base), Ok(end)) =
-                    (u64::from_str_radix(a, 16), u64::from_str_radix(b, 16))
+                let (Some(a), Some(b)) = (rr.next(), rr.next()) else {
+                    continue;
+                };
+                let (Ok(base), Ok(end)) = (u64::from_str_radix(a, 16), u64::from_str_radix(b, 16))
                 else {
                     continue;
                 };
                 let p = perms.as_bytes();
                 out.push(MemRegion {
                     base,
-                    size: end - base,
+                    // `end`/`base` are parsed from /proc/<pid>/maps; guard against
+                    // a malformed line where end < base rather than panicking.
+                    size: end.saturating_sub(base),
                     readable: p.first() == Some(&b'r'),
                     writable: p.get(1) == Some(&b'w'),
                     executable: p.get(2) == Some(&b'x'),
@@ -314,9 +318,7 @@ mod imp {
     use super::*;
     use core::ffi::c_void;
     use windows_sys::Win32::Foundation::{CloseHandle, FALSE, HANDLE};
-    use windows_sys::Win32::System::Diagnostics::Debug::{
-        ReadProcessMemory, WriteProcessMemory,
-    };
+    use windows_sys::Win32::System::Diagnostics::Debug::{ReadProcessMemory, WriteProcessMemory};
     use windows_sys::Win32::System::Memory::{
         VirtualQueryEx, MEMORY_BASIC_INFORMATION, MEM_COMMIT, PAGE_EXECUTE, PAGE_EXECUTE_READ,
         PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_READONLY, PAGE_READWRITE,
@@ -348,8 +350,10 @@ mod imp {
             if pid == super::own_pid() {
                 return Self::open_self();
             }
-            let access =
-                PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION;
+            let access = PROCESS_VM_READ
+                | PROCESS_VM_WRITE
+                | PROCESS_VM_OPERATION
+                | PROCESS_QUERY_INFORMATION;
             let handle = unsafe { OpenProcess(access, FALSE, pid) };
             if handle.is_null() {
                 return Err(io::Error::new(
@@ -516,7 +520,12 @@ pub struct ProcessSource {
 }
 
 impl ProcessSource {
-    pub fn new(handle: std::sync::Arc<ProcessHandle>, base: u64, len: u64, label: impl Into<String>) -> Self {
+    pub fn new(
+        handle: std::sync::Arc<ProcessHandle>,
+        base: u64,
+        len: u64,
+        label: impl Into<String>,
+    ) -> Self {
         Self {
             handle,
             base,
@@ -545,7 +554,7 @@ impl DataSource for ProcessSource {
         }
         let want = buf.len().min((self.len - offset) as usize);
         self.handle
-            .read(self.base + offset, &mut buf[..want])
+            .read(self.base.saturating_add(offset), &mut buf[..want])
             .unwrap_or(0)
     }
 

@@ -52,7 +52,12 @@ pub fn serialize(s: &Sidecar) -> String {
         ));
     }
     for n in &s.notes {
-        out.push_str(&format!("note {:X} {:X} {}\n", n.offset, n.len, n.text.replace('\n', " ")));
+        out.push_str(&format!(
+            "note {:X} {:X} {}\n",
+            n.offset,
+            n.len,
+            n.text.replace('\n', " ")
+        ));
     }
     out
 }
@@ -141,8 +146,16 @@ mod tests {
                 Region::inaccessible(0x1000, 0x800, "kernel area"),
             ],
             notes: vec![
-                Note { offset: 0x20, len: 4, text: "magic number".into() },
-                Note { offset: 0x40, len: 8, text: "timestamp field".into() },
+                Note {
+                    offset: 0x20,
+                    len: 4,
+                    text: "magic number".into(),
+                },
+                Note {
+                    offset: 0x40,
+                    len: 8,
+                    text: "timestamp field".into(),
+                },
             ],
         }
     }

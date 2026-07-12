@@ -180,12 +180,12 @@ pub fn compute(
 /// (including nonstandard / proprietary ones) by supplying the constants.
 #[derive(Clone, Copy, Debug)]
 pub struct CrcParams {
-    pub width: u32,    // 1..=64
-    pub poly: u64,     // generator polynomial (normal form)
-    pub init: u64,     // initial register value
-    pub refin: bool,   // reflect input bytes
-    pub refout: bool,  // reflect the output
-    pub xorout: u64,   // final XOR value
+    pub width: u32,   // 1..=64
+    pub poly: u64,    // generator polynomial (normal form)
+    pub init: u64,    // initial register value
+    pub refin: bool,  // reflect input bytes
+    pub refout: bool, // reflect the output
+    pub xorout: u64,  // final XOR value
 }
 
 fn reflect(mut v: u64, bits: u32) -> u64 {
@@ -202,10 +202,18 @@ fn reflect(mut v: u64, bits: u32) -> u64 {
 pub fn custom_crc(data: &[u8], p: &CrcParams) -> u64 {
     let width = p.width.clamp(8, 64);
     let topbit = 1u64 << (width - 1);
-    let mask = if width == 64 { u64::MAX } else { (1u64 << width) - 1 };
+    let mask = if width == 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    };
     let mut crc = p.init & mask;
     for &byte in data {
-        let b = if p.refin { reflect(byte as u64, 8) } else { byte as u64 };
+        let b = if p.refin {
+            reflect(byte as u64, 8)
+        } else {
+            byte as u64
+        };
         // bring the byte into the top 8 bits of the register
         crc ^= (b << (width - 8)) & mask;
         for _ in 0..8 {
@@ -233,7 +241,13 @@ mod tests {
         // `offset + len` overflowing u64 must not panic; an out-of-range window
         // produces the empty-input digest rather than crashing.
         let doc = Document::from_source(Arc::new(MemSource::new(vec![0u8; 16], "t")));
-        let r = compute(&doc, u64::MAX - 1, u64::MAX, &[Algo::Crc32], &Progress::default());
+        let r = compute(
+            &doc,
+            u64::MAX - 1,
+            u64::MAX,
+            &[Algo::Crc32],
+            &Progress::default(),
+        );
         assert_eq!(r.len(), 1);
     }
 
@@ -242,24 +256,56 @@ mod tests {
         // The standard "123456789" check values for several CRCs.
         let check = b"123456789";
         // CRC-32 (ISO-HDLC): poly 0x04C11DB7, init/xorout 0xFFFFFFFF, reflected
-        let crc32 = custom_crc(check, &CrcParams {
-            width: 32, poly: 0x04C11DB7, init: 0xFFFFFFFF, refin: true, refout: true, xorout: 0xFFFFFFFF,
-        });
+        let crc32 = custom_crc(
+            check,
+            &CrcParams {
+                width: 32,
+                poly: 0x04C11DB7,
+                init: 0xFFFFFFFF,
+                refin: true,
+                refout: true,
+                xorout: 0xFFFFFFFF,
+            },
+        );
         assert_eq!(crc32, 0xCBF43926);
         // CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection
-        let crc16 = custom_crc(check, &CrcParams {
-            width: 16, poly: 0x1021, init: 0xFFFF, refin: false, refout: false, xorout: 0,
-        });
+        let crc16 = custom_crc(
+            check,
+            &CrcParams {
+                width: 16,
+                poly: 0x1021,
+                init: 0xFFFF,
+                refin: false,
+                refout: false,
+                xorout: 0,
+            },
+        );
         assert_eq!(crc16, 0x29B1);
         // CRC-8 (SMBus): poly 0x07, init 0, no reflection
-        let crc8 = custom_crc(check, &CrcParams {
-            width: 8, poly: 0x07, init: 0, refin: false, refout: false, xorout: 0,
-        });
+        let crc8 = custom_crc(
+            check,
+            &CrcParams {
+                width: 8,
+                poly: 0x07,
+                init: 0,
+                refin: false,
+                refout: false,
+                xorout: 0,
+            },
+        );
         assert_eq!(crc8, 0xF4);
         // CRC-16/ARC: poly 0x8005, reflected — matches our built-in CRC-16
-        let arc = custom_crc(check, &CrcParams {
-            width: 16, poly: 0x8005, init: 0, refin: true, refout: true, xorout: 0,
-        });
+        let arc = custom_crc(
+            check,
+            &CrcParams {
+                width: 16,
+                poly: 0x8005,
+                init: 0,
+                refin: true,
+                refout: true,
+                xorout: 0,
+            },
+        );
         assert_eq!(arc, 0xBB3D);
     }
 
@@ -305,7 +351,10 @@ mod tests {
 
     #[test]
     fn sha512_and_crc_variants() {
-        let m = hashes(b"abc", &[Algo::Sha512, Algo::Crc16, Algo::Crc64, Algo::Adler32]);
+        let m = hashes(
+            b"abc",
+            &[Algo::Sha512, Algo::Crc16, Algo::Crc64, Algo::Adler32],
+        );
         assert_eq!(
             m[&Algo::Sha512],
             "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a\

@@ -51,7 +51,9 @@ struct Scope {
 
 impl Scope {
     fn new() -> Self {
-        Self { stack: vec![HashMap::new()] }
+        Self {
+            stack: vec![HashMap::new()],
+        }
     }
     fn push(&mut self) {
         self.stack.push(HashMap::new());
@@ -204,10 +206,19 @@ impl Parser {
             return Ok(e);
         }
         if let Some(h) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
-            return i64::from_str_radix(h, 16).map(Expr::Int).map_err(|_| "bad hex".into());
+            return i64::from_str_radix(h, 16)
+                .map(Expr::Int)
+                .map_err(|_| "bad hex".into());
         }
-        if t.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-            return t.parse::<i64>().map(Expr::Int).map_err(|_| "bad number".into());
+        if t.chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            return t
+                .parse::<i64>()
+                .map(Expr::Int)
+                .map_err(|_| "bad number".into());
         }
         Ok(Expr::Var(t))
     }
@@ -221,7 +232,10 @@ fn parse_expr(s: &str) -> Result<Expr, String> {
     let mut p = Parser { toks, pos: 0 };
     let e = p.parse()?;
     if p.pos != p.toks.len() {
-        return Err(format!("trailing tokens in expression near '{}'", p.toks[p.pos]));
+        return Err(format!(
+            "trailing tokens in expression near '{}'",
+            p.toks[p.pos]
+        ));
     }
     Ok(e)
 }
@@ -411,7 +425,10 @@ fn parse_magic(inner: &str) -> Result<Vec<u8>, String> {
     }
     inner
         .split_whitespace()
-        .map(|t| u8::from_str_radix(t.trim_start_matches("0x"), 16).map_err(|_| format!("bad magic byte '{t}'")))
+        .map(|t| {
+            u8::from_str_radix(t.trim_start_matches("0x"), 16)
+                .map_err(|_| format!("bad magic byte '{t}'"))
+        })
         .collect()
 }
 
@@ -517,7 +534,10 @@ impl Schema {
                     o => return Err(err(format!("endian must be le|be, got '{o}'"))),
                 };
                 i += 1;
-            } else if content == "seq:" || content.starts_with("type ") || content.starts_with("enum ") {
+            } else if content == "seq:"
+                || content.starts_with("type ")
+                || content.starts_with("enum ")
+            {
                 // gather body lines (indent > 0) following this header
                 let mut body = Vec::new();
                 let mut j = i + 1;
@@ -527,17 +547,29 @@ impl Schema {
                 }
                 if content == "seq:" {
                     for (bl, ln) in &body {
-                        schema.root.push(parse_field(bl, &type_names).map_err(|m| format!("line {ln}: {m}"))?);
+                        schema.root.push(
+                            parse_field(bl, &type_names).map_err(|m| format!("line {ln}: {m}"))?,
+                        );
                     }
                 } else if let Some(rest) = content.strip_prefix("type ") {
-                    let name = rest.trim().strip_suffix(':').ok_or_else(|| err("type needs ':'".into()))?.trim();
+                    let name = rest
+                        .trim()
+                        .strip_suffix(':')
+                        .ok_or_else(|| err("type needs ':'".into()))?
+                        .trim();
                     let mut fields = Vec::new();
                     for (bl, ln) in &body {
-                        fields.push(parse_field(bl, &type_names).map_err(|m| format!("line {ln}: {m}"))?);
+                        fields.push(
+                            parse_field(bl, &type_names).map_err(|m| format!("line {ln}: {m}"))?,
+                        );
                     }
                     schema.types.insert(name.to_string(), fields);
                 } else if let Some(rest) = content.strip_prefix("enum ") {
-                    let name = rest.trim().strip_suffix(':').ok_or_else(|| err("enum needs ':'".into()))?.trim();
+                    let name = rest
+                        .trim()
+                        .strip_suffix(':')
+                        .ok_or_else(|| err("enum needs ':'".into()))?
+                        .trim();
                     let mut map = HashMap::new();
                     for (bl, ln) in &body {
                         let mut it = bl.splitn(2, char::is_whitespace);
@@ -638,13 +670,19 @@ impl<'a> Interp<'a> {
                     },
                     None => format!("{v}"),
                 };
-                Ok((self.leaf(name, start, format!("u{}", w * 8), value), Some(scalar)))
+                Ok((
+                    self.leaf(name, start, format!("u{}", w * 8), value),
+                    Some(scalar),
+                ))
             }
             FieldType::S(w, e) => {
                 let raw = self.read_uint(*w, self.endian_of(*e))?;
                 let shift = 64 - w * 8;
                 let v = ((raw << shift) as i64) >> shift;
-                Ok((self.leaf(name, start, format!("s{}", w * 8), v.to_string()), Some(v)))
+                Ok((
+                    self.leaf(name, start, format!("s{}", w * 8), v.to_string()),
+                    Some(v),
+                ))
             }
             FieldType::F(w, e) => {
                 let raw = self.read_uint(*w, self.endian_of(*e))?;
@@ -658,13 +696,20 @@ impl<'a> Interp<'a> {
             FieldType::Ascii(cnt) => {
                 let n = eval(cnt, scope)?.max(0) as usize;
                 let bytes = self.read_bytes(n)?;
-                let s = String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_string();
+                let s = String::from_utf8_lossy(&bytes)
+                    .trim_end_matches('\0')
+                    .to_string();
                 Ok((self.leaf(name, start, "ascii".into(), s), None))
             }
             FieldType::Bytes(cnt) => {
                 let n = eval(cnt, scope)?.max(0) as usize;
                 let bytes = self.read_bytes(n)?;
-                let preview: String = bytes.iter().take(16).map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ");
+                let preview: String = bytes
+                    .iter()
+                    .take(16)
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 let value = if bytes.len() > 16 {
                     format!("{preview} … ({} bytes)", bytes.len())
                 } else {
@@ -677,7 +722,15 @@ impl<'a> Interp<'a> {
                 if &got != m {
                     return Err(format!("magic mismatch at {start:#X}"));
                 }
-                Ok((self.leaf(name, start, "magic".into(), String::from_utf8_lossy(m).into_owned()), None))
+                Ok((
+                    self.leaf(
+                        name,
+                        start,
+                        "magic".into(),
+                        String::from_utf8_lossy(m).into_owned(),
+                    ),
+                    None,
+                ))
             }
             FieldType::User(tname) => {
                 let fields = self
@@ -764,8 +817,13 @@ impl<'a> Interp<'a> {
                         break;
                     }
                     let before = self.pos;
-                    let (mut node, scalar) =
-                        self.read_one(&format!("{}[{idx}]", f.name), &f.ty, &f.enumref, scope, depth)?;
+                    let (mut node, scalar) = self.read_one(
+                        &format!("{}[{idx}]", f.name),
+                        &f.ty,
+                        &f.enumref,
+                        scope,
+                        depth,
+                    )?;
                     node.name = format!("{}[{idx}]", f.name);
                     let elem_val = scalar;
                     children.push(node);
@@ -869,7 +927,10 @@ mod tests {
     }
 
     fn child<'a>(n: &'a Node, name: &str) -> &'a Node {
-        n.children.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("no child '{name}'"))
+        n.children
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no child '{name}'"))
     }
 
     // ---- expression engine ----
@@ -970,7 +1031,8 @@ mod tests {
 
     #[test]
     fn conditional_field() {
-        let s = Schema::parse("endian le\nseq:\n  flags u8\n  name ascii(3) if(flags & 1)\n").unwrap();
+        let s =
+            Schema::parse("endian le\nseq:\n  flags u8\n  name ascii(3) if(flags & 1)\n").unwrap();
         // flag set -> name present
         let on = apply(&s, &doc(b"\x01abc"), 0).unwrap();
         assert_eq!(child(&on, "name").value, "abc");
@@ -1007,9 +1069,13 @@ mod tests {
     #[test]
     fn magic_mismatch_and_eod() {
         let s = Schema::parse("endian le\nseq:\n  m magic(\"GIF\")\n").unwrap();
-        assert!(apply(&s, &doc(b"XXX"), 0).unwrap_err().contains("magic mismatch"));
+        assert!(apply(&s, &doc(b"XXX"), 0)
+            .unwrap_err()
+            .contains("magic mismatch"));
         let s2 = Schema::parse("endian le\nseq:\n  a u32\n").unwrap();
-        assert!(apply(&s2, &doc(b"\x01"), 0).unwrap_err().contains("end of data"));
+        assert!(apply(&s2, &doc(b"\x01"), 0)
+            .unwrap_err()
+            .contains("end of data"));
     }
 
     #[test]
