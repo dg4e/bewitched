@@ -90,7 +90,7 @@ icon = ["assets/icon.png"]
 
 # Debian package metadata for `cargo install cargo-deb` + `cargo deb`.
 [package.metadata.deb]
-maintainer = "realytcracker <spamming@gmail.com>"
+maintainer = "Digital Gangster Enterprises, LLC <support@digitalgangster.com>"
 section = "utils"
 priority = "optional"
 extended-description = "A fast, cross-platform, hacker-esque hex editor for files, disks and RAM."
