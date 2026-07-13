@@ -4,7 +4,7 @@ version = "0.2.3"
 edition = "2021"
 description = "A fast, cross-platform, hacker-esque hex editor for files, disks and RAM"
 authors = ["realytcracker"]
-license = "MIT"
+license = "GPL-3.0-or-later"
 
 [[bin]]
 name = "bewitched"
@@ -85,7 +85,7 @@ unlimited undo, and offers search/replace, checksums, statistics, export,
 byte patterns, data-folds and file tools.
 """
 category = "DeveloperTool"
-copyright = "Copyright (c) realytcracker"
+copyright = "Copyright (c) ytcracker and clord"
 icon = ["assets/icon.png"]
 
 # Debian package metadata for `cargo install cargo-deb` + `cargo deb`.
