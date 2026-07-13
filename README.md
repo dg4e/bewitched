@@ -225,41 +225,41 @@ apply.
 
 ```
 src/
-  data/         engine
-    source.rs   DataSource trait + mmap/file/memory sources
-    document.rs piece-table, undo/redo, ByteReader trait + Send snapshot
-    regions.rs  foldable regions ("data-folds") + offset/row view map
-    process.rs  live process memory (Mach VM / proc / Win32) + ProcessSource
-  ops/          feature operations (all unit-tested)
-    search.rs   streaming multi-type find / replace
-    checksum.rs streaming digests
-    stats.rs    distribution + entropy
-    export.rs   source / text / hex-file exporters
-    pattern.rs  byte-pattern generation
-    fileops.rs  shred / split / concat / compare
-    inspect.rs  data inspector (typed decode of cursor bytes)
-    transform.rs in-place byte transforms (xor/rotate/swap/...)
-    strings.rs  ASCII + UTF-16 string extraction
-    scan.rs     value scanner (first-scan + refine) + freeze
-    pointer.rs  pointer scanning + multi-level chains
-    signatures.rs binwalk-style format/crypto signature scan
-    patch.rs    IPS patch create / parse / apply
-    diff.rs     detailed binary diff (all differing ranges)
-    byteplot.rs byte-as-pixel visualization
-    disasm.rs   multi-arch disasm (14 ISAs, pure Rust): x86/ARM/MIPS/PPC/RISC-V/MSP430/6502/SM83
-    template.rs flat binary template DSL + field encode
-    kstruct.rs  nested Kaitai-style struct parser (types/repeat/if/enum/expr)
-    compress.rs gzip/zlib/deflate (flate2, pure Rust)
-    script.rs / script_store.rs  Rhai scripting + user script library
-    script.rs   sandboxed Rhai scripting over a byte buffer
-    sidecar.rs  persistent annotations (.bw): bookmarks/regions/notes
-  cli.rs        headless CLI subcommands - bewitched sha256 FILE ...
-  mcp.rs        MCP (Model Context Protocol) server - bewitched --mcp
-  ui/           egui front-end
+  data/                  engine
+    source.rs            DataSource trait + mmap/file/memory sources
+    document.rs          piece-table, undo/redo, ByteReader trait + Send snapshot
+    regions.rs           foldable regions ("data-folds") + offset/row view map
+    process.rs           live process memory (Mach VM / proc / Win32) + ProcessSource
+  ops/                   feature operations (all unit-tested)
+    search.rs            streaming multi-type find / replace
+    checksum.rs          streaming digests
+    stats.rs             distribution + entropy
+    export.rs            source / text / hex-file exporters
+    pattern.rs           byte-pattern generation
+    fileops.rs           shred / split / concat / compare
+    inspect.rs           data inspector (typed decode of cursor bytes)
+    transform.rs         in-place byte transforms (xor/rotate/swap/...)
+    strings.rs           ASCII + UTF-16 string extraction
+    scan.rs              value scanner (first-scan + refine) + freeze
+    pointer.rs           pointer scanning + multi-level chains
+    signatures.rs        binwalk-style format/crypto signature scan
+    patch.rs             IPS / BPS patch create / parse / apply
+    diff.rs              detailed binary diff (all differing ranges)
+    byteplot.rs          byte-as-pixel visualization
+    disasm.rs            multi-arch disasm (14 ISAs, pure Rust)
+    template.rs          flat binary template DSL + field encode
+    kstruct.rs           nested Kaitai-style struct parser (types/repeat/if/enum/expr)
+    compress.rs          gzip/zlib/deflate (flate2, pure Rust)
+    script.rs            sandboxed Rhai scripting over a byte buffer
+    script_store.rs      user script library (save/load .rhai files)
+    sidecar.rs           persistent annotations (.bw): bookmarks/regions/notes
+  cli.rs                 headless CLI subcommands - bewitched sha256 FILE ...
+  mcp.rs                 MCP (Model Context Protocol) server - bewitched --mcp
+  ui/                    egui front-end
     app.rs / app_ui.rs   application state, menus, hex view, dialogs
-    hexview.rs  column math, colored row building, click hit-testing
-    charset.rs  ANSI / CP437 / EBCDIC / Mac Roman decoders
-    theme.rs    phosphor-green terminal theme
+    hexview.rs           column math, colored row building, click hit-testing
+    charset.rs           ANSI / CP437 / EBCDIC / Mac Roman decoders
+    theme.rs             phosphor-green terminal theme
 ```
 
 ## Status
