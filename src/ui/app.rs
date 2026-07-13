@@ -14,6 +14,7 @@ use crate::ops::{
 };
 
 use super::charset::Charset;
+use super::donate;
 use super::hexview::{self, Layout, Pane, ViewMode};
 use super::theme;
 
@@ -412,6 +413,7 @@ pub struct App {
     inspector_le: bool,
     regions_open: bool,
     about_open: bool,
+    donate: donate::DonateUi,
 }
 
 impl App {
@@ -495,6 +497,7 @@ impl App {
             inspector_le: true,
             regions_open: false,
             about_open: false,
+            donate: donate::DonateUi::default(),
         }
     }
 

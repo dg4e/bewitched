@@ -2565,6 +2565,10 @@ impl App {
                     0.0,
                     egui::Stroke::new(bw, hsv((t * 0.7).rem_euclid(1.0), 1.0, 1.0)),
                 );
+
+                // ---- donation chips (see ui::donate) ----
+                ui.add_space(6.0);
+                self.donate.ui(ui);
             });
         self.about_open = open;
     }

@@ -462,6 +462,7 @@ dependencies = [
  "egui_extras",
  "flate2",
  "iced-x86",
+ "image",
  "mach2",
  "md-5",
  "memmap2",

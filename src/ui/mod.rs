@@ -2,6 +2,7 @@
 
 mod app;
 mod charset;
+mod donate;
 mod hexview;
 pub mod icon;
 #[cfg(target_os = "macos")]
