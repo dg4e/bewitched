@@ -59,8 +59,8 @@ pub const CHIPS: [Chip; 6] = [
     },
     Chip {
         label: "sol",
-        tip: "1ytcdgNzF3ygR8faAcFhu3SjoexhmwdAJ — click to copy",
-        action: Action::Copy("1ytcdgNzF3ygR8faAcFhu3SjoexhmwdAJ"),
+        tip: "ytcdgu2BmXeqfiLR6v4Y1FMwezjL6CUNR1fy928aToQ — click to copy",
+        action: Action::Copy("ytcdgu2BmXeqfiLR6v4Y1FMwezjL6CUNR1fy928aToQ"),
         png: include_bytes!("../../assets/donate/solana.png"),
     },
 ];
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(by_label("eth").action, Action::Copy("ytcracker.eth"));
         assert_eq!(
             by_label("sol").action,
-            Action::Copy("1ytcdgNzF3ygR8faAcFhu3SjoexhmwdAJ")
+            Action::Copy("ytcdgu2BmXeqfiLR6v4Y1FMwezjL6CUNR1fy928aToQ")
         );
     }
 
