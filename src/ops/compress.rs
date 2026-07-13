@@ -47,7 +47,7 @@ pub fn detect(data: &[u8]) -> Option<Codec> {
     // zlib: CM=8 in low nibble of byte 0, and (CMF<<8 | FLG) % 31 == 0
     if (data[0] & 0x0f) == 8
         && (data[0] & 0xf0) <= 0x70
-        && ((data[0] as u16) << 8 | data[1] as u16) % 31 == 0
+        && ((data[0] as u16) << 8 | data[1] as u16).is_multiple_of(31)
     {
         return Some(Codec::Zlib);
     }

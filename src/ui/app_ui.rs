@@ -2283,7 +2283,7 @@ impl App {
                 let own = crate::data::own_pid();
                 egui::Frame::none()
                     .fill(theme::BG_ALT)
-                    .stroke(egui::Stroke::new(1.0, theme::RED))
+                    .stroke(egui::Stroke::new(1.0_f32, theme::RED))
                     .inner_margin(8.0)
                     .rounding(2.0)
                     .show(ui, |ui| {

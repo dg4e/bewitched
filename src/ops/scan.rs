@@ -73,7 +73,7 @@ pub fn first_scan(
         let mut i = 0usize;
         while i + nlen <= hay.len() {
             let abs = pos + i as u64;
-            if abs % align == 0 && &hay[i..i + nlen] == needle {
+            if abs.is_multiple_of(align) && &hay[i..i + nlen] == needle {
                 out.push(Match {
                     offset: abs,
                     bytes: needle.to_vec(),

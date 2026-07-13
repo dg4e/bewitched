@@ -402,7 +402,7 @@ fn scalar_type(tok: &str) -> Option<FieldType> {
     // shift (`64 - w*8`) and reads would otherwise underflow / truncate.
     let width = |c: &str| -> Option<usize> {
         let bits: usize = c.parse().ok()?;
-        (bits != 0 && bits % 8 == 0 && bits <= 64).then_some(bits / 8)
+        (bits != 0 && bits.is_multiple_of(8) && bits <= 64).then_some(bits / 8)
     };
     if base.len() < 2 {
         return None;

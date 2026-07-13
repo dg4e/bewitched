@@ -45,27 +45,27 @@ pub fn install(ctx: &egui::Context) {
     v.window_fill = BG;
     v.extreme_bg_color = BG;
     v.faint_bg_color = BG_ALT;
-    v.window_stroke = Stroke::new(1.0, GREEN_FAINT);
+    v.window_stroke = Stroke::new(1.0_f32, GREEN_FAINT);
     v.window_rounding = Rounding::same(2.0);
     v.selection.bg_fill = SEL_BG;
-    v.selection.stroke = Stroke::new(1.0, GREEN);
+    v.selection.stroke = Stroke::new(1.0_f32, GREEN);
     v.hyperlink_color = AMBER;
 
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = PANEL;
-    w.noninteractive.fg_stroke = Stroke::new(1.0, GREEN_DIM);
-    w.noninteractive.bg_stroke = Stroke::new(1.0, GREEN_FAINT);
+    w.noninteractive.fg_stroke = Stroke::new(1.0_f32, GREEN_DIM);
+    w.noninteractive.bg_stroke = Stroke::new(1.0_f32, GREEN_FAINT);
     w.inactive.bg_fill = BG_ALT;
     w.inactive.weak_bg_fill = BG_ALT;
-    w.inactive.fg_stroke = Stroke::new(1.0, GREEN_DIM);
+    w.inactive.fg_stroke = Stroke::new(1.0_f32, GREEN_DIM);
     w.inactive.rounding = Rounding::same(2.0);
     w.hovered.bg_fill = GREEN_FAINT;
     w.hovered.weak_bg_fill = GREEN_FAINT;
-    w.hovered.fg_stroke = Stroke::new(1.0, GREEN);
-    w.hovered.bg_stroke = Stroke::new(1.0, GREEN);
+    w.hovered.fg_stroke = Stroke::new(1.0_f32, GREEN);
+    w.hovered.bg_stroke = Stroke::new(1.0_f32, GREEN);
     w.hovered.rounding = Rounding::same(2.0);
     w.active.bg_fill = GREEN_FAINT;
-    w.active.fg_stroke = Stroke::new(1.0, GREEN);
+    w.active.fg_stroke = Stroke::new(1.0_f32, GREEN);
     w.active.rounding = Rounding::same(2.0);
 
     style.spacing.item_spacing = egui::vec2(6.0, 4.0);

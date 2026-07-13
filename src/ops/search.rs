@@ -91,7 +91,7 @@ pub fn needle_bytes(
                 .chars()
                 .filter(|c| !c.is_whitespace() && *c != ',' && *c != '-')
                 .collect();
-            if cleaned.len() % 2 != 0 {
+            if !cleaned.len().is_multiple_of(2) {
                 return Err("hex needs an even number of digits".into());
             }
             let mut v = Vec::with_capacity(cleaned.len() / 2);

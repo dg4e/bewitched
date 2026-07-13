@@ -43,7 +43,7 @@ pub fn find_pointers_to(
         }
         let mut i = 0;
         while i + 8 <= n {
-            if (pos + i as u64) % align == 0 {
+            if (pos + i as u64).is_multiple_of(align) {
                 let v = u64::from_le_bytes(buf[i..i + 8].try_into().unwrap());
                 if v >= lo && v <= target {
                     out.push((image_base + pos + i as u64, target - v));
