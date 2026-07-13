@@ -274,6 +274,8 @@ Raw disk/RAM device entries require elevated privileges to open.
 
 ## License
 
+Copyright (C) 2026 Digital Gangster Enterprises, LLC.
+
 bewitched is free software licensed under the **GNU General Public License,
 version 3 or later** (GPL-3.0-or-later). See the [LICENSE](LICENSE) file for the
 full text. You may redistribute and/or modify it under those terms; it comes with

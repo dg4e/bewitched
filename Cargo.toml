@@ -85,7 +85,7 @@ unlimited undo, and offers search/replace, checksums, statistics, export,
 byte patterns, data-folds and file tools.
 """
 category = "DeveloperTool"
-copyright = "Copyright (c) ytcracker and clord"
+copyright = "Copyright (c) Digital Gangster Enterprises, LLC"
 icon = ["assets/icon.png"]
 
 # Debian package metadata for `cargo install cargo-deb` + `cargo deb`.
