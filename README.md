@@ -1,5 +1,7 @@
 # bewitched
 
+<img src="assets/icon.png" alt="bewitched icon" width="128">
+
 A fast, cross-platform, hacker-esque **hex editor** for files, raw disks and RAM,
 written in Rust with an immediate-mode (`egui`) GUI. It edits files of any size
 (up to 8 EB) with instant opening, unlimited undo, and a streamlined,
@@ -39,6 +41,13 @@ blocks.
 - **Navigation**: arrows, page up/down, home/end, go-to-address (`Ctrl+G`),
   nibble stepping (`Ctrl+←/→`), 10 bookmarks (`Ctrl+Shift+0-9` to set,
   `Ctrl+0-9` to jump).
+- **Vim mode** (Edit ▸ vim keybindings, remembered between launches): modal
+  NORMAL / VISUAL / INSERT / REPLACE editing with counts. Motions `h j k l`,
+  `w b e` (byte group, or 8 bytes ungrouped), `0 ^ $`, `gg G` (`nG` = row n),
+  `Ctrl+F/B/D/U`; edits `i a I A R`, `r<hex><hex>` (or `r<char>` in the text
+  pane), `x X dd D ~`, `u` / `Ctrl+R`; `yy p P`; `v` visual with `o d y`;
+  `/ ? n N` search, `:` go to address, `m0-9` / `'0-9` bookmarks; Esc returns
+  to NORMAL. The current mode shows in the status bar.
 - **Search / replace** (`Ctrl+F`) for text, Unicode (UTF-16), hex, integers
   (8/16/32/64) and floats (32/64), little/big-endian, forward / backward /
   from-start, case-insensitive, streaming (never loads the whole file). Hex

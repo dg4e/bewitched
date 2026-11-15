@@ -8,6 +8,7 @@ pub mod icon;
 #[cfg(target_os = "macos")]
 mod macos;
 mod theme;
+mod vim;
 
 use app::App;
 use std::path::PathBuf;
@@ -41,7 +42,7 @@ pub fn run() -> eframe::Result<()> {
         }
     }
 
-    let (rgba, iw, ih) = icon::rgba(8);
+    let (rgba, iw, ih) = icon::rgba();
     let title = format!("bewitched v{}", env!("CARGO_PKG_VERSION"));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

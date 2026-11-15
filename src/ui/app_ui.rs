@@ -14,6 +14,13 @@ const REDO_HINT: &str = "⇧⌘Z";
 #[cfg(not(target_os = "macos"))]
 const REDO_HINT: &str = "^Y";
 
+/// Hover help listing the vim keybindings.
+const VIM_HELP: &str = "vim-style modal editing. NORMAL mode keys are commands; counts work (e.g. 4j, 3x, 2dd).\n\
+move: h j k l · w b e (next/prev/end of byte group, 8 bytes if ungrouped) · 0 ^ $ (row start/end) · gg G (file start/end; nG = row n) · ^F ^B ^D ^U (page / half page)\n\
+edit: i a I A (insert) · R (overwrite) · r<hex><hex> replace byte (r<char> in text pane) · x X (delete) · dd D · ~ (flip case) · u ^R (undo/redo)\n\
+yank/paste: yy · p P · v (visual: o d y)\n\
+search: / ? n N · : go to address · m0-9 / '0-9 bookmarks · Tab switches hex/text · Esc back to NORMAL";
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_bg(ctx);
@@ -206,6 +213,11 @@ impl App {
                 };
                 if ui.button(mode_label).on_hover_text("toggle typing mode (insert key). overwrite replaces bytes (keeps length); insert adds bytes (grows the file)").clicked() {
                     self.toggle_mode();
+                    ui.close_menu();
+                }
+                let mut vim_on = self.vim_enabled;
+                if ui.checkbox(&mut vim_on, "vim keybindings").on_hover_text(VIM_HELP).changed() {
+                    self.set_vim_enabled(vim_on);
                     ui.close_menu();
                 }
             });
@@ -421,8 +433,23 @@ impl App {
                         "insert mode: typing adds bytes at the cursor, growing the file. press insert to switch to OVR",
                     ),
                 };
-                ui.label(egui::RichText::new(mode).color(theme::GREEN).strong())
-                    .on_hover_text(mode_tip);
+                if self.vim_enabled {
+                    let label = match (self.vim_mode, self.mode) {
+                        (vim::Mode::Normal, _) => "NORMAL",
+                        (vim::Mode::Visual, _) => "VISUAL",
+                        (vim::Mode::Insert, EditMode::Insert) => "INSERT",
+                        (vim::Mode::Insert, EditMode::Overwrite) => "REPLACE",
+                    };
+                    ui.label(egui::RichText::new(label).color(theme::GREEN).strong())
+                        .on_hover_text(VIM_HELP);
+                    let pending = self.vim.pending_text();
+                    if !pending.is_empty() {
+                        ui.label(egui::RichText::new(pending).color(theme::AMBER));
+                    }
+                } else {
+                    ui.label(egui::RichText::new(mode).color(theme::GREEN).strong())
+                        .on_hover_text(mode_tip);
+                }
                 ui.separator();
                 if self.process_target.is_some() {
                     ui.label(
@@ -696,6 +723,9 @@ impl App {
     fn handle_keys(&mut self, ctx: &egui::Context) {
         let events = ctx.input(|i| i.events.clone());
         for ev in events {
+            if self.vim_enabled && self.vim_event(&ev, ctx) {
+                continue;
+            }
             match ev {
                 egui::Event::Key {
                     key,
@@ -839,6 +869,350 @@ impl App {
             self.nibble = 1;
         }
         self.scroll_to_cursor = true;
+    }
+
+    // ---- vim mode ----
+
+    fn set_vim_enabled(&mut self, on: bool) {
+        self.vim_enabled = on;
+        self.vim.reset();
+        self.vim_mode = vim::Mode::Normal;
+        if on {
+            self.mode = EditMode::Overwrite;
+            self.clamp_cursor_normal();
+        }
+        vim::save_enabled(on);
+        self.status = if on {
+            "vim keybindings on — NORMAL mode (i to insert, Esc to return)".into()
+        } else {
+            "vim keybindings off".into()
+        };
+    }
+
+    /// NORMAL/VISUAL keep the cursor on an existing byte (no one-past-end).
+    fn clamp_cursor_normal(&mut self) {
+        let last = self.doc.len().saturating_sub(1);
+        if self.cursor > last {
+            self.cursor = last;
+        }
+        self.nibble = 0;
+    }
+
+    /// Route one input event through vim mode. Returns `true` when consumed.
+    fn vim_event(&mut self, ev: &egui::Event, ctx: &egui::Context) -> bool {
+        use vim::Input;
+        let hex = self.pane == Pane::Hex;
+
+        if self.vim_mode == vim::Mode::Insert {
+            // Typing goes to the normal editor; only Esc is ours.
+            if let egui::Event::Key { key: Key::Escape, pressed: true, .. } = ev {
+                self.vim_mode = vim::Mode::Normal;
+                self.mode = EditMode::Overwrite;
+                self.clamp_cursor_normal();
+                return true;
+            }
+            return false;
+        }
+
+        match ev {
+            egui::Event::Text(t) => {
+                for ch in t.chars() {
+                    if let Some(cmd) = self.vim.feed(Input::Char(ch), self.vim_mode, hex) {
+                        self.vim_exec(cmd, ctx);
+                    }
+                    // `i`, `a`, … switch to insert mode: the rest of the text is typed.
+                    if self.vim_mode == vim::Mode::Insert {
+                        break;
+                    }
+                }
+                true
+            }
+            egui::Event::Key { key, pressed: true, modifiers: m, .. } => {
+                let input = if *key == Key::Escape {
+                    Input::Esc
+                } else if m.ctrl && !m.shift && !m.alt {
+                    match key {
+                        Key::F => Input::Ctrl('f'),
+                        Key::B => Input::Ctrl('b'),
+                        Key::D => Input::Ctrl('d'),
+                        Key::U => Input::Ctrl('u'),
+                        Key::R => Input::Ctrl('r'),
+                        _ => return false,
+                    }
+                } else if m.any() && !m.shift_only() {
+                    return false; // ⌘/Ctrl shortcuts keep working
+                } else {
+                    // Map navigation keys onto vim motions so VISUAL extends.
+                    let c = match key {
+                        Key::ArrowLeft | Key::Backspace => 'h',
+                        Key::ArrowRight => 'l',
+                        Key::ArrowUp => 'k',
+                        Key::ArrowDown => 'j',
+                        Key::Home => '0',
+                        Key::End => '$',
+                        Key::Delete => 'x',
+                        Key::Insert => 'i',
+                        Key::PageDown => return self.vim_key(Input::Ctrl('f'), ctx),
+                        Key::PageUp => return self.vim_key(Input::Ctrl('b'), ctx),
+                        _ => return false,
+                    };
+                    Input::Char(c)
+                };
+                self.vim_key(input, ctx)
+            }
+            _ => false,
+        }
+    }
+
+    fn vim_key(&mut self, input: vim::Input, ctx: &egui::Context) -> bool {
+        let hex = self.pane == Pane::Hex;
+        if let Some(cmd) = self.vim.feed(input, self.vim_mode, hex) {
+            self.vim_exec(cmd, ctx);
+        }
+        true
+    }
+
+    /// Step size for `w`/`b`/`e`: the byte grouping, or 8 bytes when ungrouped.
+    fn vim_word(&self) -> u64 {
+        if self.group > 1 {
+            self.group as u64
+        } else {
+            8
+        }
+    }
+
+    /// Copy `[start, start+len)` into the internal clipboard (vim's register).
+    fn vim_yank(&mut self, start: u64, len: u64) {
+        self.clipboard = self.doc.read_range(start, len as usize);
+        self.status = format!("yanked {} bytes", self.clipboard.len());
+    }
+
+    /// Delete `[start, start+len)`, yanking it first.
+    fn vim_delete(&mut self, start: u64, len: u64) {
+        if len == 0 {
+            return;
+        }
+        self.vim_yank(start, len);
+        self.doc.delete(start, len);
+        self.status = format!("deleted {len} bytes");
+        self.cursor = start;
+        self.clamp_cursor_normal();
+        self.scroll_to_cursor = true;
+    }
+
+    fn vim_enter_insert(&mut self, at: u64, mode: EditMode) {
+        self.sel_anchor = None;
+        self.cursor = at.min(self.doc.len());
+        self.nibble = 0;
+        self.mode = mode;
+        self.vim_mode = vim::Mode::Insert;
+        self.scroll_to_cursor = true;
+    }
+
+    fn vim_exec(&mut self, cmd: vim::Cmd, ctx: &egui::Context) {
+        use vim::{Cmd, Motion};
+        let len = self.doc.len();
+        let last = len.saturating_sub(1);
+        let bpr = self.bytes_per_row as u64;
+        let cur = self.cursor.min(last);
+        let row_start = cur - cur % bpr;
+        let visual = self.vim_mode == vim::Mode::Visual;
+
+        match cmd {
+            Cmd::Move { motion, count, explicit } => {
+                let n = count as u64;
+                let page = (self.page_rows as u64).max(1);
+                let w = self.vim_word();
+                let target = match motion {
+                    Motion::Left => cur.saturating_sub(n),
+                    Motion::Right => cur.saturating_add(n),
+                    Motion::Up => cur.saturating_sub(n.saturating_mul(bpr)),
+                    Motion::Down => cur.saturating_add(n.saturating_mul(bpr)),
+                    Motion::WordFwd => (cur / w).saturating_add(n).saturating_mul(w),
+                    Motion::WordBack => {
+                        let mut p = cur;
+                        for _ in 0..count.min(1 << 20) {
+                            p = if !p.is_multiple_of(w) { p - p % w } else { p.saturating_sub(w) };
+                        }
+                        p
+                    }
+                    Motion::WordEnd => {
+                        let mut p = cur;
+                        for _ in 0..count.min(1 << 20) {
+                            p = ((p + 1) / w + 1) * w - 1;
+                        }
+                        p
+                    }
+                    Motion::RowStart => row_start,
+                    Motion::RowEnd => row_start + bpr - 1,
+                    Motion::FileStart if !explicit => 0,
+                    Motion::FileEnd if !explicit => last,
+                    Motion::FileStart | Motion::FileEnd => (n - 1).saturating_mul(bpr),
+                    Motion::PageDown => cur.saturating_add(n.saturating_mul(page * bpr)),
+                    Motion::PageUp => cur.saturating_sub(n.saturating_mul(page * bpr)),
+                    Motion::HalfPageDown => {
+                        cur.saturating_add(n.saturating_mul((page / 2).max(1) * bpr))
+                    }
+                    Motion::HalfPageUp => {
+                        cur.saturating_sub(n.saturating_mul((page / 2).max(1) * bpr))
+                    }
+                };
+                self.set_cursor(target.min(last), visual);
+            }
+            Cmd::Insert => self.vim_enter_insert(cur, EditMode::Insert),
+            Cmd::Append => self.vim_enter_insert(if len == 0 { 0 } else { cur + 1 }, EditMode::Insert),
+            Cmd::InsertRowStart => self.vim_enter_insert(row_start, EditMode::Insert),
+            Cmd::AppendRowEnd => self.vim_enter_insert(row_start + bpr, EditMode::Insert),
+            Cmd::ReplaceMode => self.vim_enter_insert(cur, EditMode::Overwrite),
+            Cmd::ReplaceByte { byte, count } => {
+                if cur < len {
+                    let k = (count as u64).min(len - cur);
+                    let data = vec![byte; k as usize];
+                    self.doc.overwrite(cur, &data);
+                    for i in 0..k {
+                        self.live_poke(cur + i, byte);
+                    }
+                    self.set_cursor(cur + k - 1, false);
+                }
+            }
+            Cmd::DeleteFwd(n) => {
+                if cur < len {
+                    self.vim_delete(cur, (n as u64).min(len - cur));
+                }
+            }
+            Cmd::DeleteBack(n) => {
+                let k = (n as u64).min(cur);
+                self.vim_delete(cur - k, k);
+            }
+            Cmd::DeleteRows(n) => {
+                if row_start < len {
+                    let k = (n as u64).saturating_mul(bpr).min(len - row_start);
+                    self.vim_delete(row_start, k);
+                }
+            }
+            Cmd::DeleteToRowEnd => {
+                if cur < len {
+                    let end = (row_start + bpr).min(len);
+                    self.vim_delete(cur, end - cur);
+                }
+            }
+            Cmd::YankRows(n) => {
+                if row_start < len {
+                    let k = (n as u64).saturating_mul(bpr).min(len - row_start);
+                    self.vim_yank(row_start, k);
+                }
+            }
+            Cmd::PasteAfter(n) | Cmd::PasteBefore(n) => {
+                if self.clipboard.is_empty() {
+                    self.status = "nothing yanked".into();
+                    return;
+                }
+                let pos = match cmd {
+                    Cmd::PasteAfter(_) if len > 0 => cur + 1,
+                    _ => cur,
+                };
+                let reps = n.min((64 << 20) / self.clipboard.len()).max(1);
+                let data = self.clipboard.repeat(reps);
+                self.doc.insert(pos, &data);
+                self.status = format!("pasted {} bytes", data.len());
+                self.set_cursor(pos + data.len() as u64 - 1, false);
+            }
+            Cmd::ToggleCase(n) => {
+                if cur < len {
+                    let k = (n as u64).min(len - cur);
+                    let mut data = self.doc.read_range(cur, k as usize);
+                    for b in &mut data {
+                        if b.is_ascii_alphabetic() {
+                            *b ^= 0x20;
+                        }
+                    }
+                    self.doc.overwrite(cur, &data);
+                    for (i, b) in data.iter().enumerate() {
+                        self.live_poke(cur + i as u64, *b);
+                    }
+                    self.set_cursor((cur + k).min(last), false);
+                }
+            }
+            Cmd::Undo(n) | Cmd::Redo(n) => {
+                for _ in 0..n.min(10_000) {
+                    if matches!(cmd, Cmd::Undo(_)) {
+                        self.doc.undo();
+                    } else {
+                        self.doc.redo();
+                    }
+                }
+                self.clamp_cursor_normal();
+                self.scroll_to_cursor = true;
+            }
+            Cmd::ToggleVisual => {
+                if visual {
+                    self.vim_mode = vim::Mode::Normal;
+                    self.clear_selection();
+                } else {
+                    self.vim_mode = vim::Mode::Visual;
+                    self.cursor = cur;
+                    self.sel_anchor = Some(cur);
+                }
+            }
+            Cmd::VisualSwap => {
+                if let Some(a) = self.sel_anchor {
+                    self.sel_anchor = Some(self.cursor);
+                    self.cursor = a;
+                    self.scroll_to_cursor = true;
+                }
+            }
+            Cmd::VisualDelete => {
+                if let Some((s, e)) = self.selection_range() {
+                    self.sel_anchor = None;
+                    self.vim_delete(s, e - s);
+                }
+                self.vim_mode = vim::Mode::Normal;
+            }
+            Cmd::VisualYank => {
+                if let Some((s, _)) = self.selection_range() {
+                    self.copy(ctx); // also puts the hex on the system clipboard
+                    self.set_cursor(s, false);
+                }
+                self.vim_mode = vim::Mode::Normal;
+            }
+            Cmd::Search => self.search.open = true,
+            Cmd::SearchNext | Cmd::SearchPrev => {
+                if self.search.needle.is_empty() {
+                    self.status = "no previous search — press / to search".into();
+                } else {
+                    let dir = if cmd == Cmd::SearchNext {
+                        search::Direction::Forward
+                    } else {
+                        search::Direction::Backward
+                    };
+                    self.do_find(dir);
+                    self.status = self.search.status.clone();
+                    // n/N land on the match start (not a selection) in NORMAL.
+                    if !visual {
+                        if let Some((s, _)) = self.selection_range() {
+                            self.set_cursor(s, false);
+                        }
+                    }
+                }
+            }
+            Cmd::Goto => self.goto.open = true,
+            Cmd::SetMark(i) => {
+                self.bookmarks[i] = Some(cur);
+                self.status = format!("bookmark {i} set at {cur:#X}");
+            }
+            Cmd::JumpMark(i) => match self.bookmarks[i] {
+                Some(addr) => {
+                    self.jump_to(addr.min(last));
+                    self.status = format!("jumped to bookmark {i}");
+                }
+                None => self.status = format!("bookmark {i} not set"),
+            },
+            Cmd::Escape => {
+                self.vim_mode = vim::Mode::Normal;
+                self.clear_selection();
+                self.extra_cursors.clear();
+            }
+        }
     }
 
     // ---- dialogs ----

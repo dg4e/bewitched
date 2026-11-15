@@ -12,14 +12,7 @@ pub fn scripts_dir() -> PathBuf {
     if let Ok(d) = std::env::var("BEWITCHED_SCRIPT_DIR") {
         return PathBuf::from(d);
     }
-    #[cfg(windows)]
-    let base = std::env::var("APPDATA").ok();
-    #[cfg(not(windows))]
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .ok()
-        .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.config")));
-    let mut p = PathBuf::from(base.unwrap_or_else(|| ".".into()));
-    p.push("bewitched");
+    let mut p = super::config_dir();
     p.push("scripts");
     p
 }
