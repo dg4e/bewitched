@@ -48,6 +48,9 @@ objc2 = "0.5"
 objc2-app-kit = "0.2"
 objc2-foundation = "0.2"
 
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
@@ -86,7 +89,7 @@ byte patterns, data-folds and file tools.
 """
 category = "DeveloperTool"
 copyright = "Copyright (c) Digital Gangster Enterprises, LLC"
-icon = ["assets/icon.png"]
+icon = ["assets/icon.png", "assets/icon.ico"]
 
 # Debian package metadata for `cargo install cargo-deb` + `cargo deb`.
 [package.metadata.deb]

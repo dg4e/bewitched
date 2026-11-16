@@ -17,6 +17,7 @@ use super::charset::Charset;
 use super::donate;
 use super::hexview::{self, Layout, Pane, ViewMode};
 use super::theme;
+use super::vim;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditMode {
@@ -414,6 +415,10 @@ pub struct App {
     regions_open: bool,
     about_open: bool,
     donate: donate::DonateUi,
+    /// Vim-style modal keybindings (Edit ▸ vim keybindings), persisted.
+    vim_enabled: bool,
+    vim_mode: vim::Mode,
+    vim: vim::Vim,
 }
 
 impl App {
@@ -498,6 +503,9 @@ impl App {
             regions_open: false,
             about_open: false,
             donate: donate::DonateUi::default(),
+            vim_enabled: vim::load_enabled(),
+            vim_mode: vim::Mode::Normal,
+            vim: vim::Vim::default(),
         }
     }
 

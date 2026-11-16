@@ -27,6 +27,20 @@ pub mod strings;
 pub mod template;
 pub mod transform;
 
+/// The per-user config directory (`%APPDATA%\bewitched` on Windows,
+/// `$XDG_CONFIG_HOME/bewitched` or `~/.config/bewitched` elsewhere).
+pub fn config_dir() -> std::path::PathBuf {
+    #[cfg(windows)]
+    let base = std::env::var("APPDATA").ok();
+    #[cfg(not(windows))]
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok().map(|h| format!("{h}/.config")));
+    let mut p = std::path::PathBuf::from(base.unwrap_or_else(|| ".".into()));
+    p.push("bewitched");
+    p
+}
+
 /// Parse a `0x`-prefixed hex or plain decimal unsigned integer — an offset,
 /// length or address as typed by the user. Whitespace is trimmed.
 pub fn parse_u64(s: &str) -> Option<u64> {
